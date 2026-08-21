@@ -226,8 +226,8 @@ func TestWatchTwoHomesTagsTouchedFiles(t *testing.T) {
 	sawHarbor, sawSkiff := false, false
 	for time.Now().Before(deadline) {
 		text := out.String()
-		sawHarbor = strings.Contains(text, `"home_id":"northwind-harbor"`) && strings.Contains(text, `"relative_path":"captain.md"`)
-		sawSkiff = strings.Contains(text, `"home_id":"skiff-secondmate"`) && strings.Contains(text, `"relative_path":"captain.md"`)
+		sawHarbor = strings.Contains(text, `"home_id":"northwind-harbor","relative_path":"captain.md"`)
+		sawSkiff = strings.Contains(text, `"home_id":"skiff-secondmate","relative_path":"captain.md"`)
 		if sawHarbor && sawSkiff {
 			break
 		}

@@ -1,6 +1,6 @@
 # roca-firstmate
 
-La Roca plugin that mirrors a firstmate home into its own federated SQLite database and routes deterministic wakeups to attached agent seats.
+La Roca plugin that mirrors one or more firstmate homes into its own federated SQLite database and routes deterministic wakeups to attached agent seats.
 
 This is the public normative full-size plugin example: `plugin.json`, a custodial `firstmate.db`, Scribe's versioned Markdown mirror, an on-demand AXI chart, Nerve v1, and the Dresser operating skill. La Roca's minimal plugin quickstart lives in the pinned v1.68 [docs/plugins.md](https://github.com/thellmwhisperer/la-roca/blob/v1.68.0/docs/plugins.md).
 
@@ -35,7 +35,7 @@ Markdown file -> version row -> SQL trigger -> companion wakeup
 
 An unchanged fingerprint creates neither a duplicate version nor a wakeup. Cursor identities are home-relative; absolute home paths are never persisted.
 
-The maintenance verbs remain available. Repeat `--home PATH --home-id ID` as positional pairs to cover more than one fabricated home in a single process; unbalanced flags exit 2. Flags only, no config file. One process owns `firstmate.db`.
+Every verb accepts repeated `--home PATH --home-id ID` positional pairs to cover more than one fabricated home in a single process; unbalanced flags exit 2. `--label` and `--kind` are also repeatable alongside those pairs. A single `--kind` broadcasts to every pair, and an omitted kind defaults to `primary`. Flags only, no config file. One process owns `firstmate.db`. Existing single-home commands keep their byte-identical output.
 
 ```sh
 roca-firstmate scribe --home '<fabricated home>' --home-id northwind-harbor --db firstmate.db
@@ -46,7 +46,7 @@ roca-firstmate watch \
   --db firstmate.db
 ```
 
-`watch` opens one recursive FSEvents subscription per home on macOS when cgo is available, and polling elsewhere. `scribe` ingests each home in sequence. Wakeup rows keep `home_id`, so a `follow` line says which home fired. Nerve adds ingest-on-read: `attach`, `chart`, `follow`, and `tick` run Scribe's fingerprint sweep for each given home before answering. `chart` and `follow` also accept an optional unpaired `--home-id` filter; the default is every registered home.
+`watch` opens one recursive FSEvents subscription per home on macOS when cgo is available, and polling elsewhere. `scribe` ingests each home in sequence. Nerve adds ingest-on-read: `attach`, `chart`, `follow`, and `tick` run Scribe's fingerprint sweep for each supplied pair before answering. For `chart` and `follow`, unpaired `--home-id` values filter already-registered homes, while omitting the filter reads every registered home. Supplying paired `--home PATH --home-id ID` values refreshes those homes but does not filter output.
 
 ## Attach: the default gesture
 
@@ -62,9 +62,9 @@ roca-firstmate attach
 Running `roca-firstmate` without a subcommand is equivalent. Attach:
 
 1. Reconciles Markdown fingerprints and ingests changes.
-2. Registers the workspace as a firstmate seat. Only a SHA-256 fingerprint and opaque default label are stored, never the path; `--label` opts into a human-readable label.
+2. Registers one workspace seat per supplied home. Only a SHA-256 fingerprint and opaque default label are stored, never the path; `--label` opts into a human-readable label.
 3. Prints the chart get-or-create, including its database watermark, and the latest mirrored handoff.
-4. Drains pending wakeups for the seat destination.
+4. Drains pending wakeups for the selected destination.
 5. Subscribes to database/WAL changes in the same foreground gesture.
 
 Attaching is subscribing. There is no init ceremony.
@@ -78,9 +78,11 @@ roca-firstmate follow --destination companion
 roca-firstmate follow --destination companion --home-id skiff-secondmate
 ```
 
+Across multiple homes, `follow` interleaves wakeups in global generation order and includes `home_id` in every JSON line.
+
 For each delivery attempt, follow writes one JSON line to stdout before committing `handled = 1` and `handled_generation = generation`. Output failure rolls the claim back. Process death or commit failure after a successful write can emit the same line again, so delivery across the stdout/SQLite boundary is at-least-once, never cross-system exactly-once. Adapters deduplicate retries by `(destination, generation)`.
 
-Direct `follow` derives an opaque seat from the current workspace unless `--workspace` or `--seat-id` is supplied, registers or refreshes that seat, and heartbeats its lease while connected. During an adapter handoff, `attach` and direct `follow` are mutually exclusive subscription owners for the same workspace and destination: stop one before starting the other so they cannot race to consume the queue.
+Direct `follow` derives and heartbeats one opaque seat per selected home from the current workspace unless `--workspace` or `--seat-id` is supplied. An explicit `--seat-id` is valid only when one home is selected. During an adapter handoff, `attach` and direct `follow` are mutually exclusive subscription owners for the same workspace and destination: stop one before starting the other so they cannot race to consume the queue.
 
 Dresser documents three adapter recipes and their intended latency:
 
@@ -96,7 +98,7 @@ Cron may run a process that is born, reconciles fingerprints, advances the silen
 roca-firstmate tick --silence-after 5m
 ```
 
-Seats keep leases in SQLite. The silence clock records durable generations for expired seats. A wakeup is orphaned when its destination has no unexpired seat lease; tick delivers it with the same one-line and handled-generation contract as follow. No tick state survives in memory.
+Seats keep leases in SQLite. The silence clock records durable generations per expired seat, and each silence wakeup keeps that seat's `home_id`. A wakeup is orphaned when its destination has no unexpired seat lease; tick delivers it with the same one-line and handled-generation contract as follow. No tick state survives in memory.
 
 ## Chart and SQL history
 
@@ -112,7 +114,7 @@ The cache lives in `chart_cache`, not Markdown. Default output is bounded TOON w
 
 ```sh
 roca exec 'SELECT home_id, relative_path, version, observed_at FROM plugin_roca_firstmate.working_set_versions WHERE is_current = 1 ORDER BY home_id, relative_path'
-roca exec 'SELECT id, destination, generation, handled_generation, kind, created_at FROM plugin_roca_firstmate.wakeups ORDER BY generation'
+roca exec 'SELECT id, home_id, destination, generation, handled_generation, kind, created_at FROM plugin_roca_firstmate.wakeups ORDER BY generation'
 ```
 
 Schema source: [`schema/schema.sql`](schema/schema.sql). The visible tables are the five `*_versions` families, `homes`, `tasks`, `ingest_file_state`, `seats`, `wakeups`, and `chart_cache`. La Roca hides `plugin_schema` bookkeeping. [`plugin.json`](plugin.json) owns the semantic and vector declarations; `schema/package_test.go` enforces their parity and selectivity.

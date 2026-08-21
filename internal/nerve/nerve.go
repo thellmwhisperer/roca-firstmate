@@ -1,16 +1,16 @@
 /*
 *
-@overview Deterministic Nerve routing for firstmate.db. ~490 lines, 11 public symbols.
+@overview Deterministic Nerve routing for firstmate.db. ~540 lines, 12 public symbols.
 
 		READING GUIDE
 		-------------
 		1. Start at Follow                   <- WAL-driven subscription loop
-		2. Read Drain                        <- no-loss at-least-once delivery boundary
+		2. Read DrainMatching                <- filtered at-least-once delivery boundary
 		3. Read Tick                         <- ephemeral silence/orphan reconciliation
 
 		MAIN FLOW
 		---------
-		RegisterSeat -> Follow -> Drain -> at-least-once generation-confirmed wakeup
+		RegisterSeat -> Follow -> DrainMatching -> at-least-once generation-confirmed wakeup
 
 		PUBLIC API
 		----------
@@ -24,13 +24,14 @@
 		LastHandoff()      Read the latest mirrored handoff
 		Follow()           Subscribe to WAL changes and drain one destination (optional home filter)
 		Drain()            Deliver and generation-confirm pending rows
+		DrainMatching()    Deliver pending rows with an optional home filter
 		Tick()             Run silence clock and orphan recovery once
 
 		INTERNALS
 		---------
-		heartbeat, silenceClock, drainOrphans, drainDestination, claimNext, nextGeneration
+		heartbeat, homeIDFilter, silenceClock, drainOrphans, drainDestination, claimNext, nextGeneration
 
-@exports SeatConfig, Seat, Handoff, Wakeup, TickResult, WorkspaceSeatID, RegisterSeat, LastHandoff, Follow, Drain, Tick
+@exports SeatConfig, Seat, Handoff, Wakeup, TickResult, WorkspaceSeatID, RegisterSeat, LastHandoff, Follow, Drain, DrainMatching, Tick
 @deps database/sql queue state; encoding/json one-line envelopes; filesystem watcher in wal_*.go
 */
 package nerve
@@ -206,7 +207,7 @@ func LastHandoff(ctx context.Context, db *sql.DB) (*Handoff, error) {
 // -- 2/4 CORE · Follow and at-least-once one-line delivery -- <- START HERE
 
 // Follow drains the current destination, then listens for database/WAL changes.
-// Its registered seat owns and heartbeats the destination subscription.
+// Its registered seats own and heartbeat the destination subscription.
 func Follow(ctx context.Context, db *sql.DB, dbPath, destination string, seatIDs, homeIDs []string, w io.Writer) error {
 	if !validDestination(destination) {
 		return fmt.Errorf("destination %q must be captain, companion, or machine", destination)
