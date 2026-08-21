@@ -58,7 +58,7 @@ Running `roca-firstmate` without a subcommand is equivalent. Attach:
 
 1. Reconciles Markdown fingerprints and ingests changes.
 2. Registers the workspace as a firstmate seat. Only a SHA-256 fingerprint and opaque default label are stored, never the path; `--label` opts into a human-readable label.
-3. Prints the chart get-or-create and the latest mirrored handoff.
+3. Prints the chart get-or-create, including its database watermark, and the latest mirrored handoff.
 4. Drains pending wakeups for the seat destination.
 5. Subscribes to database/WAL changes in the same foreground gesture.
 
