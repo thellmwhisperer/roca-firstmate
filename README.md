@@ -2,7 +2,7 @@
 
 La Roca plugin that mirrors a firstmate home into its own federated SQLite database and routes deterministic wakeups to attached agent seats.
 
-This is the public normative full-size plugin example: `plugin.json`, a custodial `firstmate.db`, Scribe's versioned Markdown mirror, an on-demand AXI chart, Nerve v1, and the Dresser operating skill. La Roca's minimal plugin quickstart lives in the pinned v1.64 [docs/plugins.md](https://github.com/thellmwhisperer/la-roca/blob/v1.64.0/docs/plugins.md).
+This is the public normative full-size plugin example: `plugin.json`, a custodial `firstmate.db`, Scribe's versioned Markdown mirror, an on-demand AXI chart, Nerve v1, and the Dresser operating skill. La Roca's minimal plugin quickstart lives in the pinned v1.68 [docs/plugins.md](https://github.com/thellmwhisperer/la-roca/blob/v1.68.0/docs/plugins.md).
 
 La Roca the product stays untouched. Firstmate is mirrored, not modified. Tests use only the fabricated homes under `testdata/homes/`; public code and text contain no live home data or install details.
 
@@ -15,6 +15,7 @@ La Roca the product stays untouched. Firstmate is mirrored, not modified. Tests 
 - Nerve is deterministic and inference-free. Destinations are `captain`, `companion`, and `machine`; mobile is later.
 - There is no default daemon and no KeepAlive service. `attach` and `follow` are foreground subscriptions. `tick` is an ephemeral cron process.
 - `state/` telemetry is outside v1. The reserved later tables remain free.
+- Vector retrieval is embeddings-only over the five family `content` columns (home prose plus task text). The plugin never declares ingest.
 
 ## Versioned mirror
 
@@ -108,7 +109,7 @@ roca exec 'SELECT home_id, relative_path, version, observed_at FROM plugin_roca_
 roca exec 'SELECT id, destination, generation, handled_generation, kind, created_at FROM plugin_roca_firstmate.wakeups ORDER BY generation'
 ```
 
-Schema source: [`schema/schema.sql`](schema/schema.sql). The visible tables are the five `*_versions` families, `homes`, `tasks`, `ingest_file_state`, `seats`, `wakeups`, and `chart_cache`. La Roca hides `plugin_schema` bookkeeping.
+Schema source: [`schema/schema.sql`](schema/schema.sql). The visible tables are the five `*_versions` families, `homes`, `tasks`, `ingest_file_state`, `seats`, `wakeups`, and `chart_cache`. La Roca hides `plugin_schema` bookkeeping. The semantic fragment lists every visible table, including seats. The vector fragment indexes only family `content`.
 
 ## Install and verify
 
@@ -139,7 +140,7 @@ make sync-db
 ## Layout
 
 ```text
-plugin.json              # identity, database declaration, semantic fragment
+plugin.json              # identity, database declaration, semantic fragment, embeddings-only vector fragment
 firstmate.db             # empty schema, operator-owned after installation
 schema/schema.sql        # source of truth for firstmate.db
 cmd/roca-firstmate/      # attach, follow, tick, chart, and Scribe verbs

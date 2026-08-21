@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "name": "roca-firstmate",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "binary": "roca",
   "databases": [
     {
@@ -212,6 +212,50 @@
               "watermark",
               "body",
               "generated_at"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "vector": {
+    "databases": [
+      {
+        "database": "firstmate",
+        "tables": [
+          {
+            "name": "working_set_versions",
+            "id_column": "id",
+            "text_columns": [
+              "content"
+            ]
+          },
+          {
+            "name": "archive_versions",
+            "id_column": "id",
+            "text_columns": [
+              "content"
+            ]
+          },
+          {
+            "name": "task_state_versions",
+            "id_column": "id",
+            "text_columns": [
+              "content"
+            ]
+          },
+          {
+            "name": "operational_doc_versions",
+            "id_column": "id",
+            "text_columns": [
+              "content"
+            ]
+          },
+          {
+            "name": "task_artifact_versions",
+            "id_column": "id",
+            "text_columns": [
+              "content"
             ]
           }
         ]

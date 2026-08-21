@@ -15,7 +15,7 @@ Public normative La Roca plugin example. It ships `firstmate.db` as an external 
 - `state/` telemetry is out of v1. Leave `status_events`, `task_meta`, and `wake_queue` free for an additive later schema.
 - Tests use fabricated homes only (`testdata/homes/`). Never copy real homes, real paths, live ids, corpus counts, or live-install details into this repo.
 - Public La Roca package compatibility is enforced by `internal/scribe/public_packages_test.go`; Nerve routing remains later.
-- Teach the plugin pattern in `README.md`. Point at La Roca `docs/plugins.md` for the minimal quickstart.
+- Teach the plugin pattern in `README.md`. Point at La Roca `docs/plugins.md` for the minimal quickstart. The semantic fragment must list every visible table, including `seats`. The vector fragment is the five family `content` columns (home prose plus task text); embeddings-only, never ingest.
 
 ## Commands
 
