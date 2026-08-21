@@ -74,6 +74,40 @@ func TestResolveChartFollowHomesTreatsBareHomeIDsAsFilter(t *testing.T) {
 	}
 }
 
+func TestResolveBareHomeIDIgnoresEnvironmentHome(t *testing.T) {
+	req, err := resolveHomes(
+		homeBinding{homeIDs: stringList{"skiff-secondmate"}},
+		"/harbor",
+		"northwind-harbor",
+		true,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(req.Pairs) != 0 || len(req.Filters) != 1 || req.Filters[0] != "skiff-secondmate" {
+		t.Fatalf("filter-only request %+v", req)
+	}
+}
+
+func TestResolveExplicitHomeDoesNotUseEnvironmentID(t *testing.T) {
+	_, err := resolveHomes(
+		homeBinding{homes: stringList{"/skiff"}},
+		"/harbor",
+		"northwind-harbor",
+		false,
+	)
+	if !errors.Is(err, errUnbalancedHomes) {
+		t.Fatalf("explicit home: err = %v, want %v", err, errUnbalancedHomes)
+	}
+}
+
+func TestResolveHomesRejectsBlankHomeID(t *testing.T) {
+	_, err := resolveHomes(homeBinding{homeIDs: stringList{" "}}, "", "", true)
+	if !errors.Is(err, errEmptyHomeID) {
+		t.Fatalf("blank home-id: err = %v, want %v", err, errEmptyHomeID)
+	}
+}
+
 func TestResolveHomesSeedsASinglePairFromEnv(t *testing.T) {
 	req, err := resolveHomes(homeBinding{}, "/harbor", "northwind-harbor", false)
 	if err != nil {

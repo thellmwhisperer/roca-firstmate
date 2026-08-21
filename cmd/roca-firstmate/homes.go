@@ -10,6 +10,7 @@ var (
 	errUnbalancedHomes = errors.New("--home and --home-id must be paired positionally")
 	errHomeRequired    = errors.New("--home and --home-id are required")
 	errHomeFreshness   = errors.New("--home and --home-id are required for ingest-on-read freshness")
+	errEmptyHomeID     = errors.New("--home-id must not be blank")
 )
 
 type stringList []string
@@ -99,12 +100,15 @@ func alignOptional(name string, values []string, n int) ([]string, error) {
 func resolveHomes(binding homeBinding, envHome, envID string, allowFilterOnly bool) (homeRequest, error) {
 	homes := append([]string(nil), binding.homes...)
 	ids := append([]string(nil), binding.homeIDs...)
-	if len(homes) == 0 {
+	for _, id := range ids {
+		if strings.TrimSpace(id) == "" {
+			return homeRequest{}, errEmptyHomeID
+		}
+	}
+	if len(homes) == 0 && len(ids) == 0 {
 		if home := strings.TrimSpace(envHome); home != "" {
 			homes = []string{home}
 		}
-	}
-	if len(ids) == 0 {
 		if id := strings.TrimSpace(envID); id != "" {
 			ids = []string{id}
 		}
@@ -115,11 +119,7 @@ func resolveHomes(binding homeBinding, envHome, envID string, allowFilterOnly bo
 		}
 		filters := make([]string, 0, len(ids))
 		for _, id := range ids {
-			id = strings.TrimSpace(id)
-			if id == "" {
-				continue
-			}
-			filters = append(filters, id)
+			filters = append(filters, strings.TrimSpace(id))
 		}
 		return homeRequest{Filters: filters}, nil
 	}

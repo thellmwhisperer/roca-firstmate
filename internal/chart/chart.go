@@ -75,8 +75,7 @@ func HelpLines() []string {
 }
 
 // Filter restricts a chart to one registered home. An empty homeID keeps every
-// registered home. The cached watermark is unchanged; only the displayed rows
-// and unhandled wakeup count are sliced.
+// registered home.
 func Filter(db *sql.DB, result Result, homeID string) (Result, error) {
 	homeID = strings.TrimSpace(homeID)
 	if homeID == "" {
@@ -88,10 +87,14 @@ func Filter(db *sql.DB, result Result, homeID string) (Result, error) {
 // FilterHomes restricts a chart to the given registered home ids. An empty
 // list keeps every registered home.
 func FilterHomes(db *sql.DB, result Result, homeIDs []string) (Result, error) {
-	allowed := map[string]struct{}{}
+	seen := map[string]struct{}{}
+	filteredIDs := make([]string, 0, len(homeIDs))
 	for _, id := range homeIDs {
 		id = strings.TrimSpace(id)
 		if id == "" {
+			continue
+		}
+		if _, ok := seen[id]; ok {
 			continue
 		}
 		var exists int
@@ -101,64 +104,23 @@ func FilterHomes(db *sql.DB, result Result, homeIDs []string) (Result, error) {
 		if exists == 0 {
 			return Result{}, fmt.Errorf("home-id %q is not registered", id)
 		}
-		allowed[id] = struct{}{}
+		seen[id] = struct{}{}
+		filteredIDs = append(filteredIDs, id)
 	}
-	if len(allowed) == 0 {
+	if len(filteredIDs) == 0 {
 		return result, nil
 	}
-	result.Homes = filterHomes(result.Homes, allowed)
-	result.WorkingSet = filterDocs(result.WorkingSet, allowed)
-	result.Archives = filterDocs(result.Archives, allowed)
-	result.TaskState = filterDocs(result.TaskState, allowed)
-	result.OperationalDocs = filterDocs(result.OperationalDocs, allowed)
-	result.Artifacts = filterArtifacts(result.Artifacts, allowed)
-	args := make([]any, 0, len(allowed))
-	placeholders := make([]string, 0, len(allowed))
-	for id := range allowed {
-		placeholders = append(placeholders, "?")
-		args = append(args, id)
+	body, err := snapshot(db, filteredIDs)
+	if err != nil {
+		return Result{}, err
 	}
-	query := `SELECT COUNT(*) FROM wakeups WHERE handled = 0 AND home_id IN (` + strings.Join(placeholders, ",") + `)`
-	if err := db.QueryRow(query, args...).Scan(&result.WakeupsUnhandled); err != nil {
-		return Result{}, fmt.Errorf("count filtered unhandled wakeups: %w", err)
-	}
-	return result, nil
-}
-
-func filterHomes(homes []Home, allowed map[string]struct{}) []Home {
-	out := make([]Home, 0, len(allowed))
-	for _, home := range homes {
-		if _, ok := allowed[home.HomeID]; ok {
-			out = append(out, home)
-		}
-	}
-	return out
-}
-
-func filterDocs(docs []Doc, allowed map[string]struct{}) []Doc {
-	out := make([]Doc, 0)
-	for _, doc := range docs {
-		if _, ok := allowed[doc.HomeID]; ok {
-			out = append(out, doc)
-		}
-	}
-	return out
-}
-
-func filterArtifacts(arts []Artifact, allowed map[string]struct{}) []Artifact {
-	out := make([]Artifact, 0)
-	for _, art := range arts {
-		if _, ok := allowed[art.HomeID]; ok {
-			out = append(out, art)
-		}
-	}
-	return out
+	return resultOf(result.Status, result.Watermark, result.GeneratedAt, body), nil
 }
 
 // GetOrCreate returns the chart for db, creating or regenerating it when the
 // watermark no longer matches the stored cache.
 func GetOrCreate(db *sql.DB, now time.Time) (Result, error) {
-	body, err := snapshot(db)
+	body, err := snapshot(db, nil)
 	if err != nil {
 		return Result{}, err
 	}
@@ -273,41 +235,53 @@ func watermark(db *sql.DB, body cachedBody) (string, error) {
 	return b.String(), nil
 }
 
-func snapshot(db *sql.DB) (cachedBody, error) {
+func snapshot(db *sql.DB, homeIDs []string) (cachedBody, error) {
 	var body cachedBody
-	homes, err := queryHomes(db)
+	homes, err := queryHomes(db, homeIDs)
 	if err != nil {
 		return cachedBody{}, err
 	}
 	body.Homes = homes
-	body.WorkingSet, err = queryDocs(db, "working_set_versions")
+	body.WorkingSet, err = queryDocs(db, "working_set_versions", homeIDs)
 	if err != nil {
 		return cachedBody{}, err
 	}
-	body.Archives, err = queryDocs(db, "archive_versions")
+	body.Archives, err = queryDocs(db, "archive_versions", homeIDs)
 	if err != nil {
 		return cachedBody{}, err
 	}
-	body.TaskState, err = queryDocs(db, "task_state_versions")
+	body.TaskState, err = queryDocs(db, "task_state_versions", homeIDs)
 	if err != nil {
 		return cachedBody{}, err
 	}
-	body.OperationalDocs, err = queryDocs(db, "operational_doc_versions")
+	body.OperationalDocs, err = queryDocs(db, "operational_doc_versions", homeIDs)
 	if err != nil {
 		return cachedBody{}, err
 	}
-	body.Artifacts, err = queryArtifacts(db)
+	body.Artifacts, err = queryArtifacts(db, homeIDs)
 	if err != nil {
 		return cachedBody{}, err
 	}
-	if err := db.QueryRow(`SELECT COUNT(*) FROM wakeups WHERE handled = 0`).Scan(&body.WakeupsUnhandled); err != nil {
+	predicate, args := homePredicate(homeIDs)
+	query := `SELECT COUNT(*) FROM wakeups WHERE handled = 0`
+	if predicate != "" {
+		query += ` AND ` + predicate
+	}
+	if err := db.QueryRow(query, args...).Scan(&body.WakeupsUnhandled); err != nil {
 		return cachedBody{}, fmt.Errorf("count unhandled wakeups: %w", err)
 	}
 	return body, nil
 }
 
-func queryHomes(db *sql.DB) ([]Home, error) {
-	rows, err := db.Query(`SELECT home_id, label, kind FROM homes ORDER BY home_id LIMIT ?`, maxRows)
+func queryHomes(db *sql.DB, homeIDs []string) ([]Home, error) {
+	predicate, args := homePredicate(homeIDs)
+	query := `SELECT home_id, label, kind FROM homes`
+	if predicate != "" {
+		query += ` WHERE ` + predicate
+	}
+	query += ` ORDER BY home_id LIMIT ?`
+	args = append(args, maxRows)
+	rows, err := db.Query(query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("homes: %w", err)
 	}
@@ -323,9 +297,16 @@ func queryHomes(db *sql.DB) ([]Home, error) {
 	return out, rows.Err()
 }
 
-func queryDocs(db *sql.DB, table string) ([]Doc, error) {
-	rows, err := db.Query(`SELECT home_id, relative_path, document_kind, version, observed_at
-		FROM `+table+` WHERE is_current = 1 ORDER BY home_id, relative_path LIMIT ?`, maxRows)
+func queryDocs(db *sql.DB, table string, homeIDs []string) ([]Doc, error) {
+	predicate, args := homePredicate(homeIDs)
+	query := `SELECT home_id, relative_path, document_kind, version, observed_at
+		FROM ` + table + ` WHERE is_current = 1`
+	if predicate != "" {
+		query += ` AND ` + predicate
+	}
+	query += ` ORDER BY home_id, relative_path LIMIT ?`
+	args = append(args, maxRows)
+	rows, err := db.Query(query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", table, err)
 	}
@@ -341,9 +322,16 @@ func queryDocs(db *sql.DB, table string) ([]Doc, error) {
 	return out, rows.Err()
 }
 
-func queryArtifacts(db *sql.DB) ([]Artifact, error) {
-	rows, err := db.Query(`SELECT home_id, task_id, relative_path, document_kind, version, observed_at
-		FROM task_artifact_versions WHERE is_current = 1 ORDER BY home_id, task_id, relative_path LIMIT ?`, maxRows)
+func queryArtifacts(db *sql.DB, homeIDs []string) ([]Artifact, error) {
+	predicate, args := homePredicate(homeIDs)
+	query := `SELECT home_id, task_id, relative_path, document_kind, version, observed_at
+		FROM task_artifact_versions WHERE is_current = 1`
+	if predicate != "" {
+		query += ` AND ` + predicate
+	}
+	query += ` ORDER BY home_id, task_id, relative_path LIMIT ?`
+	args = append(args, maxRows)
+	rows, err := db.Query(query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("task_artifact_versions: %w", err)
 	}
@@ -357,6 +345,19 @@ func queryArtifacts(db *sql.DB) ([]Artifact, error) {
 		out = append(out, art)
 	}
 	return out, rows.Err()
+}
+
+func homePredicate(homeIDs []string) (string, []any) {
+	if len(homeIDs) == 0 {
+		return "", nil
+	}
+	placeholders := make([]string, len(homeIDs))
+	args := make([]any, len(homeIDs))
+	for i, id := range homeIDs {
+		placeholders[i] = "?"
+		args[i] = id
+	}
+	return `home_id IN (` + strings.Join(placeholders, ",") + `)`, args
 }
 
 // RenderTOON paints the bounded AXI text form.

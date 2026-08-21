@@ -5,7 +5,6 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
-	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -36,6 +35,19 @@ func TestUnbalancedHomeFlagsExitUsage(t *testing.T) {
 	}
 }
 
+func TestBlankFilterHomeIDExitsUsage(t *testing.T) {
+	clearHomeEnv(t)
+	path := appliedDBPath(t)
+	var stdout, stderr bytes.Buffer
+	code := run([]string{"follow", "--db", path, "--home-id", " "}, &stdout, &stderr)
+	if code != exitUsage {
+		t.Fatalf("exit %d, want %d stderr %s stdout %s", code, exitUsage, stderr.String(), stdout.String())
+	}
+	if !strings.Contains(stderr.String(), "--home-id must not be blank") {
+		t.Fatalf("blank home-id stderr %s", stderr.String())
+	}
+}
+
 func TestScribeTwoHomesTagsWakeupsByHomeID(t *testing.T) {
 	clearHomeEnv(t)
 	path := appliedDBPath(t)
@@ -51,22 +63,19 @@ func TestScribeTwoHomesTagsWakeupsByHomeID(t *testing.T) {
 	if code != exitOK {
 		t.Fatalf("exit %d stderr %s stdout %s", code, stderr.String(), stdout.String())
 	}
-	dec := json.NewDecoder(bytes.NewReader(stdout.Bytes()))
-	var summaries []map[string]any
-	for {
-		var summary map[string]any
-		if err := dec.Decode(&summary); err == io.EOF {
-			break
-		} else if err != nil {
-			t.Fatalf("scribe json: %v\n%s", err, stdout.String())
-		}
-		summaries = append(summaries, summary)
+	var envelope struct {
+		Status string           `json:"status"`
+		Homes  []map[string]any `json:"homes"`
+		Help   []string         `json:"help"`
 	}
-	if len(summaries) != 2 {
-		t.Fatalf("summaries = %d, want 2 stdout %s", len(summaries), stdout.String())
+	if err := json.Unmarshal(stdout.Bytes(), &envelope); err != nil {
+		t.Fatalf("scribe json: %v\n%s", err, stdout.String())
 	}
-	if summaries[0]["home_id"] != "northwind-harbor" || summaries[1]["home_id"] != "skiff-secondmate" {
-		t.Fatalf("summary home ids %+v", summaries)
+	if envelope.Status != "mirrored" || len(envelope.Homes) != 2 || len(envelope.Help) == 0 {
+		t.Fatalf("scribe envelope %+v stdout %s", envelope, stdout.String())
+	}
+	if envelope.Homes[0]["home_id"] != "northwind-harbor" || envelope.Homes[1]["home_id"] != "skiff-secondmate" {
+		t.Fatalf("summary home ids %+v", envelope.Homes)
 	}
 
 	db, err := sql.Open("sqlite", "file:"+path+"?mode=ro")

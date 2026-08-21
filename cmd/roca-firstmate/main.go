@@ -124,6 +124,7 @@ func runScribe(ctx context.Context, args []string, stdout, stderr io.Writer, con
 	}
 	defer db.Close()
 	if !continuous {
+		summaries := make([]scribe.Summary, 0, len(req.Pairs))
 		for _, pair := range req.Pairs {
 			ingester, err := newIngester(ctx, db, pair, values.sourceAgent)
 			if err != nil {
@@ -135,10 +136,11 @@ func runScribe(ctx context.Context, args []string, stdout, stderr io.Writer, con
 				printScribeError(stdout, err)
 				return exitError
 			}
-			if err := renderScribe(stdout, values.asJSON, summary); err != nil {
-				printScribeError(stdout, err)
-				return exitError
-			}
+			summaries = append(summaries, summary)
+		}
+		if err := renderScribeSummaries(stdout, values.asJSON, summaries); err != nil {
+			printScribeError(stdout, err)
+			return exitError
 		}
 		return exitOK
 	}
@@ -167,6 +169,29 @@ func openDatabase(path string) (*sql.DB, error) {
 		return nil, fmt.Errorf("open firstmate.db: %w", err)
 	}
 	return db, nil
+}
+
+func renderScribeSummaries(w io.Writer, asJSON bool, summaries []scribe.Summary) error {
+	if len(summaries) == 1 {
+		return renderScribe(w, asJSON, summaries[0])
+	}
+	if asJSON {
+		help := []string{}
+		if len(summaries) > 0 {
+			help = summaries[0].Help
+		}
+		return json.NewEncoder(w).Encode(struct {
+			Status string           `json:"status"`
+			Homes  []scribe.Summary `json:"homes"`
+			Help   []string         `json:"help"`
+		}{Status: "mirrored", Homes: summaries, Help: help})
+	}
+	for _, summary := range summaries {
+		if err := renderScribe(w, false, summary); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func renderScribe(w io.Writer, asJSON bool, value any) error {
