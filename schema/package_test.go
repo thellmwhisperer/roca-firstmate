@@ -232,6 +232,43 @@ func TestFabricatedHomeHasTheFiveFamiliesAndNoLivePaths(t *testing.T) {
 	}
 }
 
+func TestDresserSkillTeachesChartSQLAndFirstmateDoor(t *testing.T) {
+	root := repoRoot(t)
+	body, err := os.ReadFile(filepath.Join(root, "skills", "dresser", "SKILL.md"))
+	if err != nil {
+		t.Fatalf("read dresser skill: %v", err)
+	}
+	text := string(body)
+	for _, want := range []string{
+		"roca-firstmate chart",
+		"roca exec",
+		"plugin_roca_firstmate",
+		"conversation door",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("dresser skill does not teach %q", want)
+		}
+	}
+	for _, banned := range []string{"session-start", "Distiller", "rides.toml"} {
+		if strings.Contains(text, banned) {
+			t.Fatalf("dresser skill mentions %q; chart is on-demand AXI, not a hook or cron", banned)
+		}
+	}
+}
+
+func TestRepoHasNoSessionStartHooks(t *testing.T) {
+	root := repoRoot(t)
+	for _, rel := range []string{
+		"rides.toml",
+		filepath.Join(".claude", "settings.json"),
+		filepath.Join("hooks", "hooks.json"),
+	} {
+		if _, err := os.Stat(filepath.Join(root, rel)); err == nil {
+			t.Fatalf("found %s; this plugin must not run at session-start", rel)
+		}
+	}
+}
+
 func TestSchemaSQLEmbedIsTheRepoFile(t *testing.T) {
 	root := repoRoot(t)
 	onDisk, err := os.ReadFile(filepath.Join(root, "schema", "schema.sql"))

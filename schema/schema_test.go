@@ -26,11 +26,29 @@ func TestApplyCreatesFiveVersionedFamilyTables(t *testing.T) {
 			t.Fatalf("schema is missing family table %s; have %v", name, got)
 		}
 	}
-	for _, name := range []string{"homes", "tasks"} {
+	for _, name := range []string{"homes", "tasks", "wakeups", "chart_cache"} {
 		if !slices.Contains(got, name) {
 			t.Fatalf("schema is missing identity table %s; have %v", name, got)
 		}
 	}
+}
+
+func TestWakeupsRejectsUnknownDestination(t *testing.T) {
+	db := appliedDB(t)
+	for _, dest := range []string{"pager", "phone"} {
+		_, err := db.Exec(`INSERT INTO wakeups (
+				destination, handled, generation, kind, payload, created_at
+			) VALUES (?, 0, 1, 'ready', '', '2026-03-14T09:00:00Z')`, dest)
+		if err == nil {
+			t.Fatalf("wakeups accepted destination %q; v1 allows machine and companion only", dest)
+		}
+	}
+	mustExec(t, db, `INSERT INTO wakeups (
+			destination, handled, generation, kind, payload, created_at
+		) VALUES ('machine', 0, 1, 'ready', 'fabricated', '2026-03-14T09:00:00Z')`)
+	mustExec(t, db, `INSERT INTO wakeups (
+			destination, handled, generation, kind, payload, created_at
+		) VALUES ('companion', 0, 1, 'decide', 'fabricated', '2026-03-14T09:00:00Z')`)
 }
 
 func TestWorkingSetRewriteIsANewVersionRow(t *testing.T) {
