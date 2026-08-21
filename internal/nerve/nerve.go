@@ -22,7 +22,7 @@
 		WorkspaceSeatID()  Stable path-derived identity
 		RegisterSeat()     Create or refresh a seat lease
 		LastHandoff()      Read the latest mirrored handoff
-		Follow()           Subscribe to WAL changes and drain one destination
+		Follow()           Subscribe to WAL changes and drain one destination (optional home filter)
 		Drain()            Deliver and generation-confirm pending rows
 		Tick()             Run silence clock and orphan recovery once
 
@@ -207,12 +207,19 @@ func LastHandoff(ctx context.Context, db *sql.DB) (*Handoff, error) {
 
 // Follow drains the current destination, then listens for database/WAL changes.
 // Its registered seat owns and heartbeats the destination subscription.
-func Follow(ctx context.Context, db *sql.DB, dbPath, destination, seatID string, w io.Writer) error {
+func Follow(ctx context.Context, db *sql.DB, dbPath, destination string, seatIDs, homeIDs []string, w io.Writer) error {
 	if !validDestination(destination) {
 		return fmt.Errorf("destination %q must be captain, companion, or machine", destination)
 	}
-	seatID = strings.TrimSpace(seatID)
-	if seatID == "" {
+	seats := make([]string, 0, len(seatIDs))
+	for _, seatID := range seatIDs {
+		seatID = strings.TrimSpace(seatID)
+		if seatID == "" {
+			continue
+		}
+		seats = append(seats, seatID)
+	}
+	if len(seats) == 0 {
 		return errors.New("follow requires a registered seat")
 	}
 	source, err := newWALSource(dbPath)
@@ -220,10 +227,13 @@ func Follow(ctx context.Context, db *sql.DB, dbPath, destination, seatID string,
 		return fmt.Errorf("watch database WAL: %w", err)
 	}
 	defer source.Close()
-	if err := heartbeat(ctx, db, seatID, time.Now().UTC()); err != nil {
-		return err
+	now := time.Now().UTC()
+	for _, seatID := range seats {
+		if err := heartbeat(ctx, db, seatID, now); err != nil {
+			return err
+		}
 	}
-	if _, err := Drain(ctx, db, []string{destination}, w); err != nil {
+	if _, err := DrainMatching(ctx, db, []string{destination}, homeIDs, w); err != nil {
 		return err
 	}
 	ticker := time.NewTicker(heartbeatInterval)
@@ -241,12 +251,15 @@ func Follow(ctx context.Context, db *sql.DB, dbPath, destination, seatID string,
 			if !ok {
 				return errors.New("database WAL event stream closed")
 			}
-			if _, err := Drain(ctx, db, []string{destination}, w); err != nil {
+			if _, err := DrainMatching(ctx, db, []string{destination}, homeIDs, w); err != nil {
 				return err
 			}
 		case now := <-ticker.C:
-			if err := heartbeat(ctx, db, seatID, now.UTC()); err != nil {
-				return err
+			now = now.UTC()
+			for _, seatID := range seats {
+				if err := heartbeat(ctx, db, seatID, now); err != nil {
+					return err
+				}
 			}
 		}
 	}
@@ -257,12 +270,18 @@ func Follow(ctx context.Context, db *sql.DB, dbPath, destination, seatID string,
 // commit failure after a successful write can repeat the line, so adapters
 // deduplicate at-least-once delivery by destination and generation.
 func Drain(ctx context.Context, db *sql.DB, destinations []string, w io.Writer) (int, error) {
+	return DrainMatching(ctx, db, destinations, nil, w)
+}
+
+// DrainMatching is Drain with an optional home_id filter. An empty homeIDs
+// list delivers every pending row for the destination.
+func DrainMatching(ctx context.Context, db *sql.DB, destinations, homeIDs []string, w io.Writer) (int, error) {
 	total := 0
 	for _, destination := range destinations {
 		if !validDestination(destination) {
 			return total, fmt.Errorf("destination %q must be captain, companion, or machine", destination)
 		}
-		drained, err := drainDestination(ctx, db, destination, "", w)
+		drained, err := drainDestination(ctx, db, destination, "", homeIDs, w)
 		if err != nil {
 			return total, err
 		}
@@ -276,7 +295,7 @@ func drainOrphans(ctx context.Context, db *sql.DB, now time.Time, w io.Writer) (
 	var destinations []string
 	cutoff := now.UTC().Format(time.RFC3339Nano)
 	for _, destination := range []string{"captain", "companion", "machine"} {
-		drained, err := drainDestination(ctx, db, destination, cutoff, w)
+		drained, err := drainDestination(ctx, db, destination, cutoff, nil, w)
 		if err != nil {
 			return total, destinations, err
 		}
@@ -288,10 +307,10 @@ func drainOrphans(ctx context.Context, db *sql.DB, now time.Time, w io.Writer) (
 	return total, destinations, nil
 }
 
-func drainDestination(ctx context.Context, db *sql.DB, destination, orphanCutoff string, w io.Writer) (int, error) {
+func drainDestination(ctx context.Context, db *sql.DB, destination, orphanCutoff string, homeIDs []string, w io.Writer) (int, error) {
 	total := 0
 	for {
-		wakeup, tx, err := claimNext(ctx, db, destination, orphanCutoff)
+		wakeup, tx, err := claimNext(ctx, db, destination, orphanCutoff, homeIDs)
 		if err != nil {
 			return total, err
 		}
@@ -314,12 +333,13 @@ func drainDestination(ctx context.Context, db *sql.DB, destination, orphanCutoff
 	}
 }
 
-func claimNext(ctx context.Context, db *sql.DB, destination, orphanCutoff string) (*Wakeup, *sql.Tx, error) {
+func claimNext(ctx context.Context, db *sql.DB, destination, orphanCutoff string, homeIDs []string) (*Wakeup, *sql.Tx, error) {
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, nil, fmt.Errorf("begin wakeup claim: %w", err)
 	}
-	row := tx.QueryRowContext(ctx, `UPDATE wakeups
+	filterSQL, filterArgs := homeIDFilter(homeIDs)
+	query := `UPDATE wakeups
 	SET handled = 1, handled_generation = generation
 	WHERE id = (
 		SELECT w.id FROM wakeups w
@@ -328,11 +348,13 @@ func claimNext(ctx context.Context, db *sql.DB, destination, orphanCutoff string
 			SELECT 1 FROM seats s
 			WHERE s.destination = w.destination AND s.lease_until > ?
 		))
+		` + filterSQL + `
 		ORDER BY generation, id LIMIT 1
 	) AND handled = 0
 	RETURNING id, destination, generation, handled_generation, kind,
-		COALESCE(home_id, ''), COALESCE(task_id, ''), payload, created_at`,
-		destination, orphanCutoff, orphanCutoff)
+		COALESCE(home_id, ''), COALESCE(task_id, ''), payload, created_at`
+	args := append([]any{destination, orphanCutoff, orphanCutoff}, filterArgs...)
+	row := tx.QueryRowContext(ctx, query, args...)
 	var wakeup Wakeup
 	if err := row.Scan(
 		&wakeup.ID, &wakeup.Destination, &wakeup.Generation, &wakeup.HandledGeneration,
@@ -486,6 +508,27 @@ func heartbeat(ctx context.Context, db *sql.DB, seatID string, now time.Time) er
 		return fmt.Errorf("seat %q is not registered; run attach first", seatID)
 	}
 	return nil
+}
+
+func homeIDFilter(homeIDs []string) (string, []any) {
+	filtered := make([]string, 0, len(homeIDs))
+	for _, id := range homeIDs {
+		id = strings.TrimSpace(id)
+		if id == "" {
+			continue
+		}
+		filtered = append(filtered, id)
+	}
+	if len(filtered) == 0 {
+		return "", nil
+	}
+	placeholders := make([]string, len(filtered))
+	args := make([]any, len(filtered))
+	for i, id := range filtered {
+		placeholders[i] = "?"
+		args[i] = id
+	}
+	return " AND w.home_id IN (" + strings.Join(placeholders, ",") + ")", args
 }
 
 func validDestination(destination string) bool {

@@ -51,6 +51,55 @@ func TestDrainPrintsOneLineAndConfirmsTheSameGeneration(t *testing.T) {
 	}
 }
 
+func TestDrainMatchingInterleavesHomeIDsAndFilters(t *testing.T) {
+	db := appliedDB(t)
+	seedHome(t, db)
+	mustExec(t, db, `INSERT INTO homes (home_id, label, kind, recorded_at)
+		VALUES ('skiff-secondmate', 'Skiff', 'secondmate', '2026-03-14T09:00:00Z')`)
+	mustExec(t, db, `INSERT INTO wakeups (
+		destination, generation, kind, home_id, payload, created_at
+	) VALUES
+	('companion', 1, 'document-mirrored', 'northwind-harbor', 'harbor', '2026-03-14T09:00:00Z'),
+	('companion', 2, 'document-mirrored', 'skiff-secondmate', 'skiff', '2026-03-14T09:00:01Z')`)
+
+	var output bytes.Buffer
+	drained, err := nerve.DrainMatching(context.Background(), db, []string{"companion"}, nil, &output)
+	if err != nil {
+		t.Fatalf("drain: %v", err)
+	}
+	if drained != 2 {
+		t.Fatalf("drained %d, want 2", drained)
+	}
+	lines := strings.Split(strings.TrimSpace(output.String()), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("lines %q", output.String())
+	}
+	var first, second nerve.Wakeup
+	if err := json.Unmarshal([]byte(lines[0]), &first); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal([]byte(lines[1]), &second); err != nil {
+		t.Fatal(err)
+	}
+	if first.HomeID != "northwind-harbor" || second.HomeID != "skiff-secondmate" {
+		t.Fatalf("interleave %+v %+v", first, second)
+	}
+
+	mustExec(t, db, `INSERT INTO wakeups (
+		destination, generation, kind, home_id, payload, created_at
+	) VALUES
+	('companion', 3, 'document-mirrored', 'northwind-harbor', 'harbor-2', '2026-03-14T09:00:02Z'),
+	('companion', 4, 'document-mirrored', 'skiff-secondmate', 'skiff-2', '2026-03-14T09:00:03Z')`)
+	var filtered bytes.Buffer
+	drained, err = nerve.DrainMatching(context.Background(), db, []string{"companion"}, []string{"skiff-secondmate"}, &filtered)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if drained != 1 || strings.Contains(filtered.String(), "northwind-harbor") {
+		t.Fatalf("filtered drain %d %q", drained, filtered.String())
+	}
+}
+
 func TestDrainRollsBackWhenDeliveryFails(t *testing.T) {
 	db := appliedDB(t)
 	mustExec(t, db, `INSERT INTO wakeups (

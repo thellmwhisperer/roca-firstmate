@@ -131,6 +131,43 @@ func TestMultiHomeRowsIncludeIdentityAndUseTotalOrder(t *testing.T) {
 	}
 }
 
+func TestFilterRestrictsChartToOneHome(t *testing.T) {
+	db := appliedDB(t)
+	if _, err := db.Exec(`INSERT INTO homes (home_id, label, kind, recorded_at) VALUES
+		('northwind-harbor', 'Harbor', 'primary', '2026-03-14T09:00:00Z'),
+		('skiff-secondmate', 'Skiff', 'secondmate', '2026-03-14T09:00:00Z');
+		INSERT INTO working_set_versions
+			(home_id, relative_path, document_kind, version, is_current, content, content_sha256, observed_at) VALUES
+		('northwind-harbor', 'captain.md', 'captain', 1, 1, 'h', 'h-sha', '2026-03-14T09:00:00Z'),
+		('skiff-secondmate', 'captain.md', 'captain', 1, 1, 's', 's-sha', '2026-03-14T09:00:00Z')`); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	result, err := chart.GetOrCreate(db, frozen)
+	if err != nil {
+		t.Fatal(err)
+	}
+	filtered, err := chart.Filter(db, result, "skiff-secondmate")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(filtered.Homes) != 1 || filtered.Homes[0].HomeID != "skiff-secondmate" {
+		t.Fatalf("homes %+v", filtered.Homes)
+	}
+	if len(filtered.WorkingSet) != 1 || filtered.WorkingSet[0].HomeID != "skiff-secondmate" {
+		t.Fatalf("working set %+v", filtered.WorkingSet)
+	}
+	if filtered.WakeupsUnhandled != 1 {
+		t.Fatalf("unhandled %d, want 1 for the filtered home", filtered.WakeupsUnhandled)
+	}
+	unfiltered, err := chart.Filter(db, result, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(unfiltered.Homes) != 2 {
+		t.Fatalf("empty filter should keep all homes %+v", unfiltered.Homes)
+	}
+}
+
 func TestTOONIsBoundedAndHasHelp(t *testing.T) {
 	db := appliedDB(t)
 	result, err := chart.GetOrCreate(db, frozen)
