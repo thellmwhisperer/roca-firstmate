@@ -1,4 +1,4 @@
-.PHONY: test lint check sync-db build
+.PHONY: test lint check sync-db build build-static
 
 test: ## Unit and contract tests
 	go test ./...
@@ -12,8 +12,12 @@ sync-db: ## Rebuild firstmate.db from schema.sql and refresh checksums.txt
 	sqlite3 firstmate.db < schema/schema.sql
 	shasum -a 256 plugin.json firstmate.db > checksums.txt
 
-build: ## Chart command
+build: ## Scribe, watcher, and chart (native FSEvents on macOS)
 	mkdir -p .tmp
-	CGO_ENABLED=0 go build -o .tmp/roca-firstmate ./cmd/roca-firstmate
+	go build -o .tmp/roca-firstmate ./cmd/roca-firstmate
+
+build-static: ## Portable build with polling watcher fallback
+	mkdir -p .tmp
+	CGO_ENABLED=0 go build -o .tmp/roca-firstmate-static ./cmd/roca-firstmate
 
 check: lint test ## CI gate

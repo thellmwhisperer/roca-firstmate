@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "name": "roca-firstmate",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "binary": "roca",
   "databases": [
     {
@@ -17,7 +17,7 @@
     "databases": [
       {
         "database": "firstmate",
-        "description": "Versioned mirror of a firstmate home's markdown inventory: startup working set, archives, task state, one-shot operational docs, and per-task artifacts. Every rewrite is a new row; the current file is the latest version. Also holds the Nerve wakeups queue and the on-demand AXI chart cache.",
+        "description": "Total versioned mirror of a firstmate home's Markdown data tree: startup working set, archives, task state, one-shot operational docs, and per-task artifacts. Every rewrite is a new row; the current file is the latest version. Incremental cursor state, SQL-triggered Nerve wakeups, and the on-demand AXI chart cache share the same database.",
         "questions": [
           "What did the firstmate home mirror record?",
           "Which firstmate working-set files, archives, task state, operational docs, or per-task artifacts were mirrored?",
@@ -147,8 +147,25 @@
             ]
           },
           {
+            "name": "ingest_file_state",
+            "description": "Incremental fingerprint cursor for total Scribe scans and file events. path is a home-relative identity and never an absolute filesystem path.",
+            "questions": [
+              "Which firstmate Markdown files have an incremental cursor?"
+            ],
+            "columns": [
+              "path",
+              "source_kind",
+              "source_agent",
+              "project",
+              "fingerprint",
+              "last_synced_at",
+              "last_error",
+              "metadata"
+            ]
+          },
+          {
             "name": "wakeups",
-            "description": "Nerve destination queue for v1: machine or companion. handled and generation support idempotent recovery. Nerve's writer lands later.",
+            "description": "Nerve destination queue for v1: machine or companion. Each mirrored document version creates a companion wakeup through a SQL trigger; handled and generation support idempotent recovery.",
             "questions": [
               "Which firstmate wakeups are unhandled?"
             ],

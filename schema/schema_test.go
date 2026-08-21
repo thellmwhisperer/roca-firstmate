@@ -26,7 +26,7 @@ func TestApplyCreatesFiveVersionedFamilyTables(t *testing.T) {
 			t.Fatalf("schema is missing family table %s; have %v", name, got)
 		}
 	}
-	for _, name := range []string{"homes", "tasks", "wakeups", "chart_cache"} {
+	for _, name := range []string{"homes", "tasks", "ingest_file_state", "wakeups", "chart_cache"} {
 		if !slices.Contains(got, name) {
 			t.Fatalf("schema is missing identity table %s; have %v", name, got)
 		}
