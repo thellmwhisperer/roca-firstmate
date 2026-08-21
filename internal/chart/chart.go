@@ -74,6 +74,87 @@ func HelpLines() []string {
 	}
 }
 
+// Filter restricts a chart to one registered home. An empty homeID keeps every
+// registered home. The cached watermark is unchanged; only the displayed rows
+// and unhandled wakeup count are sliced.
+func Filter(db *sql.DB, result Result, homeID string) (Result, error) {
+	homeID = strings.TrimSpace(homeID)
+	if homeID == "" {
+		return result, nil
+	}
+	return FilterHomes(db, result, []string{homeID})
+}
+
+// FilterHomes restricts a chart to the given registered home ids. An empty
+// list keeps every registered home.
+func FilterHomes(db *sql.DB, result Result, homeIDs []string) (Result, error) {
+	allowed := map[string]struct{}{}
+	for _, id := range homeIDs {
+		id = strings.TrimSpace(id)
+		if id == "" {
+			continue
+		}
+		var exists int
+		if err := db.QueryRow(`SELECT COUNT(*) FROM homes WHERE home_id = ?`, id).Scan(&exists); err != nil {
+			return Result{}, fmt.Errorf("read home %s: %w", id, err)
+		}
+		if exists == 0 {
+			return Result{}, fmt.Errorf("home-id %q is not registered", id)
+		}
+		allowed[id] = struct{}{}
+	}
+	if len(allowed) == 0 {
+		return result, nil
+	}
+	result.Homes = filterHomes(result.Homes, allowed)
+	result.WorkingSet = filterDocs(result.WorkingSet, allowed)
+	result.Archives = filterDocs(result.Archives, allowed)
+	result.TaskState = filterDocs(result.TaskState, allowed)
+	result.OperationalDocs = filterDocs(result.OperationalDocs, allowed)
+	result.Artifacts = filterArtifacts(result.Artifacts, allowed)
+	args := make([]any, 0, len(allowed))
+	placeholders := make([]string, 0, len(allowed))
+	for id := range allowed {
+		placeholders = append(placeholders, "?")
+		args = append(args, id)
+	}
+	query := `SELECT COUNT(*) FROM wakeups WHERE handled = 0 AND home_id IN (` + strings.Join(placeholders, ",") + `)`
+	if err := db.QueryRow(query, args...).Scan(&result.WakeupsUnhandled); err != nil {
+		return Result{}, fmt.Errorf("count filtered unhandled wakeups: %w", err)
+	}
+	return result, nil
+}
+
+func filterHomes(homes []Home, allowed map[string]struct{}) []Home {
+	out := make([]Home, 0, len(allowed))
+	for _, home := range homes {
+		if _, ok := allowed[home.HomeID]; ok {
+			out = append(out, home)
+		}
+	}
+	return out
+}
+
+func filterDocs(docs []Doc, allowed map[string]struct{}) []Doc {
+	out := make([]Doc, 0)
+	for _, doc := range docs {
+		if _, ok := allowed[doc.HomeID]; ok {
+			out = append(out, doc)
+		}
+	}
+	return out
+}
+
+func filterArtifacts(arts []Artifact, allowed map[string]struct{}) []Artifact {
+	out := make([]Artifact, 0)
+	for _, art := range arts {
+		if _, ok := allowed[art.HomeID]; ok {
+			out = append(out, art)
+		}
+	}
+	return out
+}
+
 // GetOrCreate returns the chart for db, creating or regenerating it when the
 // watermark no longer matches the stored cache.
 func GetOrCreate(db *sql.DB, now time.Time) (Result, error) {

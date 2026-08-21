@@ -35,14 +35,18 @@ Markdown file -> version row -> SQL trigger -> companion wakeup
 
 An unchanged fingerprint creates neither a duplicate version nor a wakeup. Cursor identities are home-relative; absolute home paths are never persisted.
 
-The maintenance verbs remain available and unchanged:
+The maintenance verbs remain available. Repeat `--home PATH --home-id ID` as positional pairs to cover more than one fabricated home in a single process; unbalanced flags exit 2. Flags only, no config file. One process owns `firstmate.db`.
 
 ```sh
 roca-firstmate scribe --home '<fabricated home>' --home-id northwind-harbor --db firstmate.db
 roca-firstmate watch --home '<fabricated home>' --home-id northwind-harbor --db firstmate.db
+roca-firstmate watch \
+  --home '<fabricated primary home>' --home-id northwind-harbor --kind primary \
+  --home '<fabricated second-mate home>' --home-id skiff-secondmate --kind secondmate \
+  --db firstmate.db
 ```
 
-`watch` uses recursive FSEvents on macOS when cgo is available and polling elsewhere. It is optional. Nerve adds ingest-on-read: `attach`, `chart`, `follow`, and `tick` run Scribe's total fingerprint sweep before answering.
+`watch` opens one recursive FSEvents subscription per home on macOS when cgo is available, and polling elsewhere. `scribe` ingests each home in sequence. Wakeup rows keep `home_id`, so a `follow` line says which home fired. Nerve adds ingest-on-read: `attach`, `chart`, `follow`, and `tick` run Scribe's fingerprint sweep for each given home before answering. `chart` and `follow` also accept an optional unpaired `--home-id` filter; the default is every registered home.
 
 ## Attach: the default gesture
 
@@ -71,6 +75,7 @@ Attaching is subscribing. There is no init ceremony.
 
 ```sh
 roca-firstmate follow --destination companion
+roca-firstmate follow --destination companion --home-id skiff-secondmate
 ```
 
 For each delivery attempt, follow writes one JSON line to stdout before committing `handled = 1` and `handled_generation = generation`. Output failure rolls the claim back. Process death or commit failure after a successful write can emit the same line again, so delivery across the stdout/SQLite boundary is at-least-once, never cross-system exactly-once. Adapters deduplicate retries by `(destination, generation)`.
@@ -100,6 +105,7 @@ Seats keep leases in SQLite. The silence clock records durable generations for e
 ```sh
 roca-firstmate chart --home '<fabricated home>' --home-id northwind-harbor --db firstmate.db
 roca-firstmate chart --home '<fabricated home>' --home-id northwind-harbor --db firstmate.db --json
+roca-firstmate chart --db firstmate.db --home-id skiff-secondmate
 ```
 
 The cache lives in `chart_cache`, not Markdown. Default output is bounded TOON with `help[]`; `--json` returns the complete envelope. Use gated SQL for history:
