@@ -12,7 +12,7 @@ sync-db: ## Rebuild firstmate.db from schema.sql and refresh checksums.txt
 	sqlite3 firstmate.db < schema/schema.sql
 	shasum -a 256 plugin.json firstmate.db > checksums.txt
 
-build: ## Scribe, watcher, and chart (native FSEvents on macOS)
+build: ## Nerve, chart, Scribe, and watcher (native FSEvents on macOS)
 	mkdir -p .tmp
 	go build -o .tmp/roca-firstmate ./cmd/roca-firstmate
 

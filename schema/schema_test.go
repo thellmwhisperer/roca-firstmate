@@ -26,7 +26,7 @@ func TestApplyCreatesFiveVersionedFamilyTables(t *testing.T) {
 			t.Fatalf("schema is missing family table %s; have %v", name, got)
 		}
 	}
-	for _, name := range []string{"homes", "tasks", "ingest_file_state", "wakeups", "chart_cache"} {
+	for _, name := range []string{"homes", "tasks", "ingest_file_state", "wakeups", "seats", "chart_cache"} {
 		if !slices.Contains(got, name) {
 			t.Fatalf("schema is missing identity table %s; have %v", name, got)
 		}
@@ -40,7 +40,7 @@ func TestWakeupsRejectsUnknownDestination(t *testing.T) {
 				destination, handled, generation, kind, payload, created_at
 			) VALUES (?, 0, 1, 'ready', '', '2026-03-14T09:00:00Z')`, dest)
 		if err == nil {
-			t.Fatalf("wakeups accepted destination %q; v1 allows machine and companion only", dest)
+			t.Fatalf("wakeups accepted destination %q; v1 allows captain, companion, and machine only", dest)
 		}
 	}
 	mustExec(t, db, `INSERT INTO wakeups (
@@ -49,6 +49,23 @@ func TestWakeupsRejectsUnknownDestination(t *testing.T) {
 	mustExec(t, db, `INSERT INTO wakeups (
 			destination, handled, generation, kind, payload, created_at
 		) VALUES ('companion', 0, 1, 'decide', 'fabricated', '2026-03-14T09:00:00Z')`)
+	mustExec(t, db, `INSERT INTO wakeups (
+			destination, handled, generation, kind, payload, created_at
+		) VALUES ('captain', 0, 2, 'ready', 'fabricated', '2026-03-14T09:00:00Z')`)
+}
+
+func TestHandledWakeupRequiresItsGeneration(t *testing.T) {
+	db := appliedDB(t)
+	mustExec(t, db, `INSERT INTO wakeups (
+		destination, generation, kind, payload, created_at
+	) VALUES ('machine', 4, 'ready', 'fabricated', '2026-03-14T09:00:00Z')`)
+	if _, err := db.Exec(`UPDATE wakeups SET handled = 1 WHERE generation = 4`); err == nil {
+		t.Fatal("wakeup was handled without recording its generation")
+	}
+	if _, err := db.Exec(`UPDATE wakeups SET handled = 1, handled_generation = 3 WHERE generation = 4`); err == nil {
+		t.Fatal("wakeup accepted a mismatched handled generation")
+	}
+	mustExec(t, db, `UPDATE wakeups SET handled = 1, handled_generation = generation WHERE generation = 4`)
 }
 
 func TestWorkingSetRewriteIsANewVersionRow(t *testing.T) {

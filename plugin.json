@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "name": "roca-firstmate",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "binary": "roca",
   "databases": [
     {
@@ -17,7 +17,7 @@
     "databases": [
       {
         "database": "firstmate",
-        "description": "Total versioned mirror of a firstmate home's Markdown data tree: startup working set, archives, task state, root operational docs, and per-task artifacts. Every rewrite is a new row; the current file is the latest version. Incremental cursor state, SQL-triggered Nerve wakeups, and the on-demand AXI chart cache share the same database.",
+        "description": "Total versioned mirror of a firstmate home's Markdown data tree: startup working set, archives, task state, root operational docs, and per-task artifacts. Every rewrite is a new row; the current file is the latest version. Incremental cursor state, attached workspace seats, SQL-triggered Nerve wakeups, and the on-demand AXI chart cache share the same database.",
         "questions": [
           "What did the firstmate home mirror record?",
           "Which firstmate working-set files, archives, task state, operational docs, or per-task artifacts were mirrored?",
@@ -165,7 +165,7 @@
           },
           {
             "name": "wakeups",
-            "description": "Nerve destination queue for v1: machine or companion. Each mirrored document version creates a companion wakeup through a SQL trigger; handled and generation support idempotent recovery.",
+            "description": "Nerve destination queue for v1: captain, companion, or machine. Each mirrored document version creates a companion wakeup through a SQL trigger; handled_generation confirms the generation printed by follow.",
             "questions": [
               "Which firstmate wakeups are unhandled?"
             ],
@@ -174,11 +174,31 @@
               "destination",
               "handled",
               "generation",
+              "handled_generation",
               "kind",
               "home_id",
               "task_id",
               "payload",
               "created_at"
+            ]
+          },
+          {
+            "name": "seats",
+            "description": "Attached workspace subscriptions. Workspaces are stored only as opaque fingerprints; leases and silence generations let an ephemeral tick recover without in-memory state.",
+            "questions": [
+              "Which firstmate workspace seats are attached?",
+              "Which seat subscriptions are silent or expired?"
+            ],
+            "columns": [
+              "seat_id",
+              "home_id",
+              "workspace_fingerprint",
+              "label",
+              "destination",
+              "attached_at",
+              "last_seen_at",
+              "lease_until",
+              "silence_generation"
             ]
           },
           {

@@ -22,6 +22,7 @@ func TestOpenDatabaseMigratesFabricatedV1BeforeUse(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, statement := range []string{
+		`DROP TABLE seats`,
 		`DROP TRIGGER working_set_version_wakeup`,
 		`DROP TRIGGER archive_version_wakeup`,
 		`DROP TRIGGER task_state_version_wakeup`,
@@ -124,8 +125,8 @@ func TestOpenDatabaseMigratesFabricatedV1BeforeUse(t *testing.T) {
 	if err := db.QueryRow(`SELECT schema_version FROM plugin_schema WHERE singleton = 1`).Scan(&version); err != nil {
 		t.Fatal(err)
 	}
-	if version != 2 {
-		t.Fatalf("schema version = %d, want 2", version)
+	if version != 3 {
+		t.Fatalf("schema version = %d, want 3", version)
 	}
 	for table, want := range map[string]int{
 		"working_set_versions":     1,
@@ -215,5 +216,97 @@ func TestOpenDatabaseMigratesFabricatedV1BeforeUse(t *testing.T) {
 		'fabricated mismatch', 'ddd', '2026-03-14T11:00:00Z'
 	)`); err == nil {
 		t.Fatal("migration accepted a non-literal task path")
+	}
+}
+
+func TestOpenDatabaseMigratesFabricatedV2WakeupState(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "fabricated-v2.db")
+	db, err := sql.Open("sqlite", "file:"+path+"?_pragma=foreign_keys(1)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := schema.Apply(db); err != nil {
+		t.Fatal(err)
+	}
+	for _, statement := range []string{
+		`DROP TRIGGER working_set_version_wakeup`,
+		`DROP TRIGGER archive_version_wakeup`,
+		`DROP TRIGGER task_state_version_wakeup`,
+		`DROP TRIGGER operational_doc_version_wakeup`,
+		`DROP TRIGGER task_artifact_version_wakeup`,
+		`DROP TABLE seats`,
+		`DROP INDEX wakeups_unhandled`,
+		`DROP INDEX wakeups_generation`,
+		`ALTER TABLE wakeups RENAME TO wakeups_v3`,
+		`CREATE TABLE wakeups (
+			id INTEGER PRIMARY KEY,
+			destination TEXT NOT NULL CHECK (destination IN ('machine', 'companion')),
+			handled INTEGER NOT NULL DEFAULT 0 CHECK (handled IN (0, 1)),
+			generation INTEGER NOT NULL,
+			kind TEXT NOT NULL DEFAULT '',
+			home_id TEXT REFERENCES homes(home_id),
+			task_id TEXT,
+			payload TEXT NOT NULL DEFAULT '',
+			created_at TEXT NOT NULL
+		)`,
+		`DROP TABLE wakeups_v3`,
+		`CREATE INDEX wakeups_unhandled ON wakeups(handled, destination) WHERE handled = 0`,
+		`CREATE INDEX wakeups_generation ON wakeups(generation)`,
+		`CREATE TRIGGER working_set_version_wakeup AFTER INSERT ON working_set_versions BEGIN SELECT 1; END`,
+		`CREATE TRIGGER archive_version_wakeup AFTER INSERT ON archive_versions BEGIN SELECT 1; END`,
+		`CREATE TRIGGER task_state_version_wakeup AFTER INSERT ON task_state_versions BEGIN SELECT 1; END`,
+		`CREATE TRIGGER operational_doc_version_wakeup AFTER INSERT ON operational_doc_versions BEGIN SELECT 1; END`,
+		`CREATE TRIGGER task_artifact_version_wakeup AFTER INSERT ON task_artifact_versions BEGIN SELECT 1; END`,
+		`INSERT INTO wakeups (destination, handled, generation, kind, payload, created_at)
+			VALUES ('machine', 1, 8, 'ready', 'fabricated handled', '2026-03-14T09:00:00Z')`,
+		`INSERT INTO wakeups (destination, handled, generation, kind, payload, created_at)
+			VALUES ('companion', 0, 9, 'decide', 'fabricated pending', '2026-03-14T10:00:00Z')`,
+		`UPDATE plugin_schema SET schema_version = 2 WHERE singleton = 1`,
+	} {
+		if _, err := db.Exec(statement); err != nil {
+			t.Fatalf("fabricate v2: %v\n%s", err, statement)
+		}
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	db, err = openDatabase(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	var version int
+	if err := db.QueryRow(`SELECT schema_version FROM plugin_schema WHERE singleton = 1`).Scan(&version); err != nil {
+		t.Fatal(err)
+	}
+	if version != 3 {
+		t.Fatalf("schema version = %d, want 3", version)
+	}
+	var handled, handledGeneration int
+	if err := db.QueryRow(`SELECT handled, handled_generation FROM wakeups WHERE generation = 8`).
+		Scan(&handled, &handledGeneration); err != nil {
+		t.Fatal(err)
+	}
+	if handled != 1 || handledGeneration != 8 {
+		t.Fatalf("preserved handled wakeup = %d/%d", handled, handledGeneration)
+	}
+	var pendingHandled int
+	var pendingGeneration sql.NullInt64
+	if err := db.QueryRow(`SELECT handled, handled_generation FROM wakeups WHERE generation = 9`).
+		Scan(&pendingHandled, &pendingGeneration); err != nil {
+		t.Fatal(err)
+	}
+	if pendingHandled != 0 || pendingGeneration.Valid {
+		t.Fatalf("pending wakeup changed = %d/%v", pendingHandled, pendingGeneration)
+	}
+	if _, err := db.Exec(`INSERT INTO wakeups (
+		destination, generation, kind, payload, created_at
+	) VALUES ('captain', 10, 'ready', 'fabricated captain', '2026-03-14T11:00:00Z')`); err != nil {
+		t.Fatalf("captain destination after migration: %v", err)
+	}
+	var seats int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM seats`).Scan(&seats); err != nil {
+		t.Fatalf("seats after migration: %v", err)
 	}
 }

@@ -22,9 +22,10 @@ func TestRunCreatesChartWithoutInitCeremony(t *testing.T) {
 		t.Fatalf("apply: %v", err)
 	}
 	db.Close()
+	home := filepath.Join("..", "..", "testdata", "homes", "northwind-harbor")
 
 	var stdout, stderr bytes.Buffer
-	code := run([]string{"chart", "--db", path}, &stdout, &stderr)
+	code := run([]string{"chart", "--db", path, "--home", home, "--home-id", "northwind-harbor"}, &stdout, &stderr)
 	if code != 0 {
 		t.Fatalf("exit %d stderr %s", code, stderr.String())
 	}
@@ -43,9 +44,10 @@ func TestRunJSONAndUsageExitCodes(t *testing.T) {
 		t.Fatalf("apply: %v", err)
 	}
 	db.Close()
+	home := filepath.Join("..", "..", "testdata", "homes", "northwind-harbor")
 
 	var stdout bytes.Buffer
-	if code := run([]string{"chart", "--db", path, "--json"}, &stdout, os.Stderr); code != 0 {
+	if code := run([]string{"chart", "--db", path, "--home", home, "--home-id", "northwind-harbor", "--json"}, &stdout, os.Stderr); code != 0 {
 		t.Fatalf("json exit %d", code)
 	}
 	if !strings.Contains(stdout.String(), `"status"`) {
@@ -67,7 +69,7 @@ func TestRunJSONAndUsageExitCodes(t *testing.T) {
 		t.Fatalf("unknown command exit %d, want 2", code)
 	}
 	var missing bytes.Buffer
-	if code := run([]string{"chart", "--db", filepath.Join(t.TempDir(), "absent.db")}, &missing, os.Stderr); code != 1 {
+	if code := run([]string{"chart", "--db", filepath.Join(t.TempDir(), "absent.db"), "--home", home, "--home-id", "northwind-harbor"}, &missing, os.Stderr); code != 1 {
 		t.Fatalf("missing db exit %d, want 1", code)
 	}
 }

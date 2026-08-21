@@ -83,7 +83,7 @@ func TestHandledWakeupRegeneratesChart(t *testing.T) {
 	if first.WakeupsUnhandled != 1 {
 		t.Fatalf("unhandled wakeups %d, want 1", first.WakeupsUnhandled)
 	}
-	if _, err := db.Exec(`UPDATE wakeups SET handled = 1 WHERE id = 1`); err != nil {
+	if _, err := db.Exec(`UPDATE wakeups SET handled = 1, handled_generation = generation WHERE id = 1`); err != nil {
 		t.Fatalf("handle wakeup: %v", err)
 	}
 	second, err := chart.GetOrCreate(db, frozen.Add(time.Minute))
