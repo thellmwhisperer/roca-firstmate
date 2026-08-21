@@ -21,6 +21,7 @@ import (
 	"github.com/thellmwhisperer/roca-firstmate/internal/chart"
 	"github.com/thellmwhisperer/roca-firstmate/internal/scribe"
 	filewatch "github.com/thellmwhisperer/roca-firstmate/internal/watch"
+	"github.com/thellmwhisperer/roca-firstmate/schema"
 	_ "modernc.org/sqlite"
 )
 
@@ -210,6 +211,10 @@ func openDatabase(path string) (*sql.DB, error) {
 		return nil, fmt.Errorf("open firstmate.db: %w", err)
 	}
 	if err := db.Ping(); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("open firstmate.db: %w", err)
+	}
+	if err := schema.Migrate(db); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("open firstmate.db: %w", err)
 	}

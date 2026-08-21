@@ -42,7 +42,7 @@ The same versioning contract applies to the other four families, so a later rewr
 
 ## Scribe: total backfill and continuous ingest
 
-First install runs a total fingerprinted backfill. The long-lived command starts the watcher before that backfill, then handles one changed Markdown path per event:
+The data-package installer does not execute Scribe. The first `roca-firstmate watch` launch starts the watcher, runs the total fingerprinted backfill, then handles one changed Markdown path per event:
 
 ```sh
 roca-firstmate scribe --home /path/to/fabricated-or-local-firstmate --home-id local-primary --db firstmate.db
@@ -72,13 +72,21 @@ ORDER BY home_id, relative_path
 
 ## Install
 
-The third-party plugin surface is experimental and default-off. Set `features.plugins = true` in the La Roca config, then:
+The verified installer payload remains data-only: exactly `plugin.json` and `firstmate.db`. Obtain the independently versioned Scribe executable with Go, ensure Go's bin directory is on `PATH`, then install the database package:
 
 ```sh
-roca plugin install thellmwhisperer/roca-firstmate
+go install github.com/thellmwhisperer/roca-firstmate/cmd/roca-firstmate@v0.2.0
+roca plugin install thellmwhisperer/roca-firstmate --json
 ```
 
-Or install from a local checkout of this repository. The installer verifies `checksums.txt` (exactly `plugin.json` and `firstmate.db`), shows a DATA-ONLY consent screen, and copies the package under the operator's plugin directory. Because the database declares `custody: true`, uninstall archives it instead of deleting it.
+The third-party plugin surface is experimental and default-off, so enable `features.plugins` in La Roca before the second command. The JSON install result reports the installed `firstmate.db` path. Use that value to start the long-lived watcher; this first Scribe launch, not plugin installation, performs the required initial backfill:
+
+```sh
+export ROCA_FIRSTMATE_DB='<installed firstmate.db path from the JSON result>'
+roca-firstmate watch --home '<firstmate home>' --home-id local-primary
+```
+
+The executable can also be built from a public checkout with `make build` and run as `.tmp/roca-firstmate`. A nightly safety-net job may run `roca-firstmate scribe` with the same flags, but `watch` remains the primary continuous mechanism. The installer verifies `checksums.txt`, shows a DATA-ONLY consent screen, and copies the package under the operator's plugin directory. Because the database declares `custody: true`, uninstall archives it instead of deleting it.
 
 This repository's tests and agents do not install the plugin onto a live captain La Roca. Prove the payload with `make check`; use `make sync-db` only to rebuild the database and checksums after changing their sources.
 

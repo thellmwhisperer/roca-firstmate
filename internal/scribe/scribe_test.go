@@ -114,6 +114,13 @@ func TestTotalIngestKeepsArbitraryAndNestedMarkdown(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(nested, "trace.md"), []byte("fabricated nested evidence\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	patternNested := filepath.Join(data, "task[1]", "evidence")
+	if err := os.MkdirAll(patternNested, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(patternNested, "trace.md"), []byte("fabricated pattern task evidence\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 
 	db := appliedDB(t)
 	ingester, err := scribe.New(context.Background(), db, scribe.Config{
@@ -126,10 +133,10 @@ func TestTotalIngestKeepsArbitraryAndNestedMarkdown(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.Scanned != 15 || result.Inserted != 15 || result.OperationalDocs != 2 || result.TaskArtifacts != 3 {
+	if result.Scanned != 16 || result.Inserted != 16 || result.OperationalDocs != 2 || result.TaskArtifacts != 4 {
 		t.Fatalf("total ingest = %+v", result)
 	}
-	assertCount(t, db, "wakeups", 15)
+	assertCount(t, db, "wakeups", 16)
 }
 
 func TestCursorStoresNoAbsoluteHomePath(t *testing.T) {
