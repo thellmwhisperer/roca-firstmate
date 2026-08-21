@@ -1,0 +1,8 @@
+.tmp/
+.worktrees/
+*.db-journal
+*.db-wal
+*.db-shm
+.DS_Store
+.fm-grok-turnend
+/bin/
