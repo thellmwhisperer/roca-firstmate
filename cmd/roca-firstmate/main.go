@@ -295,7 +295,7 @@ func bindMirrorVerbFlags(fs *flag.FlagSet, values *mirrorVerbFlags) {
 	fs.StringVar(&values.dbPath, "db", os.Getenv("ROCA_FIRSTMATE_DB"), "path to firstmate.db")
 	fs.StringVar(&values.home, "home", os.Getenv("FIRSTMATE_HOME"), "path to the firstmate home")
 	fs.StringVar(&values.homeID, "home-id", os.Getenv("FIRSTMATE_HOME_ID"), "stable local identity for this home")
-	fs.StringVar(&values.label, "label", "", "human-readable home label (default home-id)")
+	fs.StringVar(&values.label, "label", "", "explicit human-readable home and seat label")
 	fs.StringVar(&values.kind, "kind", "primary", "home kind: primary or secondmate")
 	fs.StringVar(&values.sourceAgent, "source-agent", "firstmate", "source agent recorded in the cursor")
 	fs.StringVar(&values.destination, "destination", "companion", "wakeup destination: captain, companion, or machine")
@@ -345,13 +345,42 @@ type attachEnvelope struct {
 	Help      []string       `json:"help"`
 }
 
+type seatVerbFlags struct {
+	workspace string
+	seatID    string
+}
+
+func bindSeatVerbFlags(fs *flag.FlagSet, values *seatVerbFlags) {
+	fs.StringVar(&values.workspace, "workspace", "", "workspace to register (default current directory; only its hash is stored)")
+	fs.StringVar(&values.seatID, "seat-id", "", "explicit stable seat identity (default derived from workspace)")
+}
+
+func (values *seatVerbFlags) normalize() error {
+	if strings.TrimSpace(values.workspace) != "" {
+		return nil
+	}
+	cwd, err := os.Getwd()
+	if err != nil {
+		return err
+	}
+	values.workspace = cwd
+	return nil
+}
+
+func registerSubscriptionSeat(ctx context.Context, db *sql.DB, mirror mirrorVerbFlags, values seatVerbFlags) (nerve.Seat, error) {
+	return nerve.RegisterSeat(ctx, db, nerve.SeatConfig{
+		SeatID: values.seatID, HomeID: mirror.homeID, Workspace: values.workspace,
+		Label: mirror.label, Destination: mirror.destination, Now: time.Now().UTC(),
+	})
+}
+
 func runAttach(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("attach", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	values := mirrorVerbFlags{}
 	bindMirrorVerbFlags(fs, &values)
-	workspace := fs.String("workspace", "", "workspace to register (default current directory; only its hash is stored)")
-	seatID := fs.String("seat-id", "", "explicit stable seat identity (default derived from workspace)")
+	seatValues := seatVerbFlags{}
+	bindSeatVerbFlags(fs, &seatValues)
 	fs.Usage = func() { usage(stderr) }
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -369,13 +398,9 @@ func runAttach(ctx context.Context, args []string, stdout, stderr io.Writer) int
 		usage(stderr)
 		return exitUsage
 	}
-	if strings.TrimSpace(*workspace) == "" {
-		cwd, err := os.Getwd()
-		if err != nil {
-			printNerveError(stdout, err)
-			return exitError
-		}
-		*workspace = cwd
+	if err := seatValues.normalize(); err != nil {
+		printNerveError(stdout, err)
+		return exitError
 	}
 	db, freshness, err := openFreshDatabase(ctx, values)
 	if err != nil {
@@ -383,16 +408,12 @@ func runAttach(ctx context.Context, args []string, stdout, stderr io.Writer) int
 		return exitError
 	}
 	defer db.Close()
-	now := time.Now().UTC()
-	seat, err := nerve.RegisterSeat(ctx, db, nerve.SeatConfig{
-		SeatID: *seatID, HomeID: values.homeID, Workspace: *workspace,
-		Label: filepath.Base(*workspace), Destination: values.destination, Now: now,
-	})
+	seat, err := registerSubscriptionSeat(ctx, db, values, seatValues)
 	if err != nil {
 		printNerveError(stdout, err)
 		return exitError
 	}
-	chartResult, err := chart.GetOrCreate(db, now)
+	chartResult, err := chart.GetOrCreate(db, time.Now().UTC())
 	if err != nil {
 		printNerveError(stdout, err)
 		return exitError
@@ -425,7 +446,8 @@ func runFollow(ctx context.Context, args []string, stdout, stderr io.Writer) int
 	fs.SetOutput(stderr)
 	values := mirrorVerbFlags{}
 	bindMirrorVerbFlags(fs, &values)
-	seatID := fs.String("seat-id", "", "registered seat whose lease this subscription refreshes")
+	seatValues := seatVerbFlags{}
+	bindSeatVerbFlags(fs, &seatValues)
 	fs.Usage = func() { usage(stderr) }
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -443,13 +465,22 @@ func runFollow(ctx context.Context, args []string, stdout, stderr io.Writer) int
 		usage(stderr)
 		return exitUsage
 	}
+	if err := seatValues.normalize(); err != nil {
+		printNerveError(stdout, err)
+		return exitError
+	}
 	db, _, err := openFreshDatabase(ctx, values)
 	if err != nil {
 		printNerveError(stdout, err)
 		return exitError
 	}
 	defer db.Close()
-	if err := nerve.Follow(ctx, db, values.dbPath, values.destination, strings.TrimSpace(*seatID), stdout); err != nil {
+	seat, err := registerSubscriptionSeat(ctx, db, values, seatValues)
+	if err != nil {
+		printNerveError(stdout, err)
+		return exitError
+	}
+	if err := nerve.Follow(ctx, db, values.dbPath, values.destination, seat.SeatID, stdout); err != nil {
 		printNerveError(stdout, err)
 		return exitError
 	}
@@ -628,8 +659,8 @@ Usage:
 
 attach is the complete default gesture: ingest-on-read freshness, opaque seat
 registration, chart get-or-create, latest handoff, and WAL subscription.
-Attaching is subscribing. follow prints one JSON line per wakeup and confirms
-the same generation in SQLite. tick is an ephemeral cron command: it reconciles
+Attaching is subscribing. follow uses an opaque seat and prints one JSON line
+per delivery attempt before confirming its generation in SQLite. tick reconciles
 fingerprints, runs the persisted silence clock, drains orphan wakeups, and dies.
 There is no default daemon and no KeepAlive process.
 
@@ -644,10 +675,15 @@ Flags:
   --db string           path to firstmate.db (or ROCA_FIRSTMATE_DB; default firstmate.db)
   --home string         firstmate home (or FIRSTMATE_HOME; required)
   --home-id string      stable local identity (or FIRSTMATE_HOME_ID; required)
+  --label string        explicit human-readable home and seat label
   --destination string  captain, companion, or machine (default companion)
   --json                print the complete envelope
 
 Attach flags:
+  --workspace string  workspace seat (default cwd; only an opaque hash is stored)
+  --seat-id string    explicit seat identity (default derived from workspace)
+
+Follow flags:
   --workspace string  workspace seat (default cwd; only an opaque hash is stored)
   --seat-id string    explicit seat identity (default derived from workspace)
 
