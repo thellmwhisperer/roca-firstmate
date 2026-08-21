@@ -36,7 +36,8 @@ Every other plugin verb also performs the fingerprint sweep before it answers. `
 
 Use a native asynchronous wake surface when the harness has one:
 
-- Claude: Monitor with the `asyncRewake` path.
+- Claude Monitor: native millisecond wake delivery.
+- Claude `asyncRewake`: a separate native millisecond alternative.
 - OpenCode: `client.session.promptAsync`; never launch this recipe with `--pure`, because pure mode removes the plugin surface it needs.
 - Pi: a project-local TypeScript extension that waits for the follow line and prompts the active session.
 - Grok: its `background-notify` cycle.

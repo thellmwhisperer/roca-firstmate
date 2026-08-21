@@ -78,7 +78,7 @@ Direct `follow` derives an opaque seat from the current workspace unless `--work
 
 Dresser documents three adapter recipes and their intended latency:
 
-- Native wake APIs: milliseconds. Claude Monitor/`asyncRewake`, OpenCode `promptAsync` without `--pure`, Pi TypeScript extensions, Grok `background-notify`, and probable Hermes hooks after verification.
+- Native wake APIs: milliseconds. Claude Monitor or Claude `asyncRewake` as separate alternatives, OpenCode `promptAsync` without `--pure`, Pi TypeScript extensions, Grok `background-notify`, and probable Hermes hooks after verification.
 - Injection: seconds. Codex CLI and Cursor CLI pipe `follow` to `fm-send`.
 - Passive desktop sync: on open. Attach, consume the chart/handoff and pending lines, then close with the app.
 
