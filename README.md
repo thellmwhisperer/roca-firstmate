@@ -40,10 +40,10 @@ The same versioning contract applies to the other four families, so a later rewr
 Schema source: [`schema/schema.sql`](schema/schema.sql). SQL against the attached alias looks like:
 
 ```sql
-SELECT relative_path, version, observed_at
+SELECT home_id, relative_path, version, observed_at
 FROM plugin_roca_firstmate.working_set_versions
 WHERE is_current = 1
-ORDER BY relative_path
+ORDER BY home_id, relative_path
 ```
 
 ## Install

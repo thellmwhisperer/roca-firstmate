@@ -26,7 +26,7 @@ roca-firstmate chart --db firstmate.db
 The chart is a bounded window. Pull history with gated SQL against alias `plugin_roca_firstmate`:
 
 ```sh
-roca exec 'SELECT relative_path, version, observed_at FROM plugin_roca_firstmate.working_set_versions WHERE is_current = 1 ORDER BY relative_path'
+roca exec 'SELECT home_id, relative_path, version, observed_at FROM plugin_roca_firstmate.working_set_versions WHERE is_current = 1 ORDER BY home_id, relative_path'
 roca exec 'SELECT id, destination, kind, created_at FROM plugin_roca_firstmate.wakeups WHERE handled = 0 ORDER BY id'
 ```
 
