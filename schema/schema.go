@@ -1,8 +1,7 @@
 // Package schema owns the firstmate.db DDL shipped by this plugin.
 //
-// Later PRs import La Roca public packages (parsers, provenance,
-// incrementality, corpus writer) after they land. This package stays the
-// schema seat those writers apply; it does not ingest a firstmate home.
+// Scribe imports La Roca's public parser, provenance, incrementality, and
+// corpus-writer contracts. This package stays the schema seat its mirror uses.
 package schema
 
 import (
@@ -10,7 +9,7 @@ import (
 	_ "embed"
 )
 
-// SQL is the version 1 declaration. Apply replays it on an empty database.
+// SQL is the version 2 declaration. Apply replays it on an empty database.
 //
 //go:embed schema.sql
 var SQL string

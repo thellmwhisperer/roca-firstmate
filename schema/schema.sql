@@ -1,4 +1,4 @@
--- firstmate.db schema version 1.
+-- firstmate.db schema version 2.
 --
 -- Five markdown inventory families, each stored as a versioned mirror:
 -- every observed rewrite of a file is a new row, and the current file is
@@ -20,7 +20,7 @@ CREATE TABLE plugin_schema (
 );
 
 INSERT INTO plugin_schema (singleton, plugin_name, schema_version, index_version)
-VALUES (1, 'roca-firstmate', 1, 1);
+VALUES (1, 'roca-firstmate', 2, 1);
 
 CREATE TABLE homes (
   home_id TEXT PRIMARY KEY,
@@ -33,7 +33,10 @@ CREATE TABLE homes (
 -- for backlog work; this table does not migrate that layer.
 CREATE TABLE tasks (
   home_id TEXT NOT NULL REFERENCES homes(home_id),
-  task_id TEXT NOT NULL,
+  task_id TEXT NOT NULL CHECK (
+    task_id NOT IN ('', '.', '..')
+    AND instr(task_id, '/') = 0
+  ),
   PRIMARY KEY (home_id, task_id)
 );
 
@@ -129,7 +132,6 @@ CREATE TABLE operational_doc_versions (
   relative_path TEXT NOT NULL CHECK (
     relative_path NOT GLOB '*/*'
     AND relative_path NOT GLOB '/*'
-    AND instr(relative_path, '..') = 0
     AND relative_path NOT IN (
       'captain.md',
       'captain-shared.md',
@@ -162,9 +164,9 @@ CREATE TABLE task_artifact_versions (
   home_id TEXT NOT NULL REFERENCES homes(home_id),
   task_id TEXT NOT NULL,
   relative_path TEXT NOT NULL CHECK (
-    instr(relative_path, '..') = 0
-    AND relative_path GLOB (task_id || '/*')
-    AND relative_path NOT GLOB (task_id || '/*/*')
+    relative_path GLOB (task_id || '/*')
+    AND relative_path NOT GLOB '*/../*'
+    AND relative_path NOT GLOB '*/..'
   ),
   document_kind TEXT NOT NULL,
   version INTEGER NOT NULL CHECK (version >= 1),
@@ -183,8 +185,28 @@ CREATE UNIQUE INDEX task_artifact_current
 CREATE INDEX task_artifact_task
   ON task_artifact_versions(home_id, task_id);
 
--- Nerve destination queue. The AFTER INSERT trigger is later; this table
--- ships now so Nerve can land without rewriting the inventory families.
+-- Incremental cursor state shared with La Roca's public incrementality
+-- package. path is an opaque home-relative identity; absolute home paths are
+-- never persisted in the federated database.
+CREATE TABLE ingest_file_state (
+  path TEXT NOT NULL PRIMARY KEY,
+  source_kind TEXT NOT NULL,
+  source_agent TEXT,
+  project TEXT,
+  fingerprint TEXT,
+  last_synced_at TEXT,
+  last_error TEXT,
+  metadata TEXT NOT NULL DEFAULT '{}'
+);
+
+CREATE INDEX ingest_file_state_project
+  ON ingest_file_state(project);
+
+CREATE INDEX ingest_file_state_source_agent
+  ON ingest_file_state(source_agent);
+
+-- Nerve destination queue. Scribe's AFTER INSERT triggers populate companion
+-- wakeups; Nerve's later process consumes and routes them.
 -- v1 destinations are machine and companion. Mobile is later.
 CREATE TABLE wakeups (
   id INTEGER PRIMARY KEY,
@@ -203,6 +225,110 @@ CREATE INDEX wakeups_unhandled
 
 CREATE INDEX wakeups_generation
   ON wakeups(generation);
+
+-- Scribe's causal boundary is SQL, not inference: every mirrored version row
+-- produces one companion wakeup in the same transaction. Nerve consumes and
+-- routes these rows later.
+CREATE TRIGGER working_set_version_wakeup
+AFTER INSERT ON working_set_versions
+BEGIN
+  INSERT INTO wakeups (
+    destination, generation, kind, home_id, payload, created_at
+  ) VALUES (
+    'companion',
+    (SELECT COALESCE(MAX(generation), 0) + 1 FROM wakeups),
+    'document-mirrored',
+    NEW.home_id,
+    json_object(
+      'family', 'working_set',
+      'row_id', NEW.id,
+      'relative_path', NEW.relative_path,
+      'version', NEW.version
+    ),
+    NEW.observed_at
+  );
+END;
+
+CREATE TRIGGER archive_version_wakeup
+AFTER INSERT ON archive_versions
+BEGIN
+  INSERT INTO wakeups (
+    destination, generation, kind, home_id, payload, created_at
+  ) VALUES (
+    'companion',
+    (SELECT COALESCE(MAX(generation), 0) + 1 FROM wakeups),
+    'document-mirrored',
+    NEW.home_id,
+    json_object(
+      'family', 'archive',
+      'row_id', NEW.id,
+      'relative_path', NEW.relative_path,
+      'version', NEW.version
+    ),
+    NEW.observed_at
+  );
+END;
+
+CREATE TRIGGER task_state_version_wakeup
+AFTER INSERT ON task_state_versions
+BEGIN
+  INSERT INTO wakeups (
+    destination, generation, kind, home_id, payload, created_at
+  ) VALUES (
+    'companion',
+    (SELECT COALESCE(MAX(generation), 0) + 1 FROM wakeups),
+    'document-mirrored',
+    NEW.home_id,
+    json_object(
+      'family', 'task_state',
+      'row_id', NEW.id,
+      'relative_path', NEW.relative_path,
+      'version', NEW.version
+    ),
+    NEW.observed_at
+  );
+END;
+
+CREATE TRIGGER operational_doc_version_wakeup
+AFTER INSERT ON operational_doc_versions
+BEGIN
+  INSERT INTO wakeups (
+    destination, generation, kind, home_id, payload, created_at
+  ) VALUES (
+    'companion',
+    (SELECT COALESCE(MAX(generation), 0) + 1 FROM wakeups),
+    'document-mirrored',
+    NEW.home_id,
+    json_object(
+      'family', 'operational_doc',
+      'row_id', NEW.id,
+      'relative_path', NEW.relative_path,
+      'version', NEW.version
+    ),
+    NEW.observed_at
+  );
+END;
+
+CREATE TRIGGER task_artifact_version_wakeup
+AFTER INSERT ON task_artifact_versions
+BEGIN
+  INSERT INTO wakeups (
+    destination, generation, kind, home_id, task_id, payload, created_at
+  ) VALUES (
+    'companion',
+    (SELECT COALESCE(MAX(generation), 0) + 1 FROM wakeups),
+    'document-mirrored',
+    NEW.home_id,
+    NEW.task_id,
+    json_object(
+      'family', 'task_artifact',
+      'row_id', NEW.id,
+      'relative_path', NEW.relative_path,
+      'version', NEW.version
+    ),
+    NEW.observed_at
+  );
+END;
 
 -- On-demand AXI chart cache. Not a Distiller file: get-or-create stores the
 -- last generated chart and the watermark of rows it covers. Session-start

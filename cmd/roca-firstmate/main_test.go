@@ -71,3 +71,31 @@ func TestRunJSONAndUsageExitCodes(t *testing.T) {
 		t.Fatalf("missing db exit %d, want 1", code)
 	}
 }
+
+func TestRunScribeBackfillsFabricatedHome(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "firstmate.db")
+	db, err := sql.Open("sqlite", "file:"+path+"?_pragma=foreign_keys(1)")
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	if err := schema.Apply(db); err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+	home := filepath.Join("..", "..", "testdata", "homes", "northwind-harbor")
+	var stdout, stderr bytes.Buffer
+	code := run([]string{
+		"scribe", "--db", path, "--home", home,
+		"--home-id", "northwind-harbor", "--json",
+	}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("exit %d stderr %s stdout %s", code, stderr.String(), stdout.String())
+	}
+	for _, want := range []string{`"status":"mirrored"`, `"scanned":13`, `"inserted":13`, `"wakeups":13`} {
+		if !strings.Contains(stdout.String(), want) {
+			t.Fatalf("stdout %s does not contain %s", stdout.String(), want)
+		}
+	}
+}
