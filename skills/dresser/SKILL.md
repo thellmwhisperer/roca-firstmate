@@ -22,7 +22,7 @@ export FIRSTMATE_HOME_ID='local-primary'
 roca-firstmate attach
 ```
 
-This is the complete default gesture. It fingerprint-sweeps Markdown and ingests changes before answering, registers an opaque workspace seat without storing the workspace path, prints the chart get-or-create with its database watermark plus the latest handoff, drains pending `companion` wakeups, and follows the database WAL. The seat label stays opaque unless the operator explicitly supplies `--label`. Attaching is subscribing. No init, resident daemon, or KeepAlive service is implied.
+This is the complete default gesture. It fingerprint-sweeps Markdown and ingests changes before answering, registers an opaque workspace seat without storing the workspace path, prints the chart get-or-create plus the latest handoff, includes the chart's database watermark, drains pending `companion` wakeups, and follows the database WAL. The seat label stays opaque unless the operator explicitly supplies `--label`. Attaching is subscribing. No init, resident daemon, or KeepAlive service is implied.
 
 Every other plugin verb also performs the fingerprint sweep before it answers. `roca-firstmate chart` is still available when only the current chart is needed. Use `--json` for its complete envelope.
 
