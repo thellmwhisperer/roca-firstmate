@@ -49,11 +49,30 @@ type pluginManifest struct {
 			} `json:"tables"`
 		} `json:"databases"`
 	} `json:"semantic"`
+	Vector *struct {
+		Databases []struct {
+			Database string `json:"database"`
+			Tables   []struct {
+				Name        string   `json:"name"`
+				IDColumn    string   `json:"id_column"`
+				TextColumns []string `json:"text_columns"`
+			} `json:"tables"`
+		} `json:"databases"`
+	} `json:"vector"`
+	Verbs []struct {
+		Name        string `json:"name"`
+		Description string `json:"description"`
+		Capability  string `json:"capability"`
+	} `json:"verbs"`
+	Capabilities []struct {
+		Name    string   `json:"name"`
+		Command []string `json:"command"`
+	} `json:"capabilities"`
 }
 
-func TestPluginManifestDescribesTheShippedDatabase(t *testing.T) {
-	root := repoRoot(t)
-	raw, err := os.ReadFile(filepath.Join(root, "plugin.json"))
+func loadPluginManifest(t *testing.T) pluginManifest {
+	t.Helper()
+	raw, err := os.ReadFile(filepath.Join(repoRoot(t), "plugin.json"))
 	if err != nil {
 		t.Fatalf("read plugin.json: %v", err)
 	}
@@ -63,6 +82,11 @@ func TestPluginManifestDescribesTheShippedDatabase(t *testing.T) {
 	if err := decoder.Decode(&manifest); err != nil {
 		t.Fatalf("plugin.json: %v", err)
 	}
+	return manifest
+}
+
+func TestPluginManifestDescribesTheShippedDatabase(t *testing.T) {
+	manifest := loadPluginManifest(t)
 	if manifest.Schema != 1 || manifest.Name != "roca-firstmate" || manifest.Binary != "roca" {
 		t.Fatalf("plugin identity is schema=%d name=%q binary=%q", manifest.Schema, manifest.Name, manifest.Binary)
 	}
@@ -122,6 +146,42 @@ func TestPluginManifestDescribesTheShippedDatabase(t *testing.T) {
 		}
 		if !slices.Contains(tableNames(t, db), name) {
 			t.Fatalf("semantic fragment describes missing table %s", name)
+		}
+	}
+}
+
+func TestPluginManifestDeclaresEmbeddingsOnlyVectorSurfaces(t *testing.T) {
+	manifest := loadPluginManifest(t)
+	if manifest.Vector == nil || len(manifest.Vector.Databases) != 1 {
+		t.Fatal("plugin.json must declare a vector fragment for the firstmate database")
+	}
+	fragment := manifest.Vector.Databases[0]
+	if fragment.Database != "firstmate" {
+		t.Fatalf("vector database is %q, want firstmate", fragment.Database)
+	}
+	if len(fragment.Tables) != len(familyTables) {
+		t.Fatalf("vector tables are %d, want the %d prose and task-text families", len(fragment.Tables), len(familyTables))
+	}
+	for i, table := range fragment.Tables {
+		want := familyTables[i]
+		if table.Name != want {
+			t.Fatalf("vector table %d is %s, want %s", i, table.Name, want)
+		}
+		if table.IDColumn != "id" {
+			t.Fatalf("vector table %s id_column is %q, want id", table.Name, table.IDColumn)
+		}
+		if !slices.Equal(table.TextColumns, []string{"content"}) {
+			t.Fatalf("vector table %s text_columns are %v, want [content]", table.Name, table.TextColumns)
+		}
+	}
+	for _, verb := range manifest.Verbs {
+		if verb.Name == "ingest" || verb.Capability == "ingest" {
+			t.Fatal("vector selectivity is embeddings-only; plugin.json must not declare ingest")
+		}
+	}
+	for _, capability := range manifest.Capabilities {
+		if capability.Name == "ingest" {
+			t.Fatal("vector selectivity is embeddings-only; plugin.json must not declare ingest")
 		}
 	}
 }
