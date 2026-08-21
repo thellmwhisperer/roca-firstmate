@@ -109,7 +109,7 @@ roca exec 'SELECT home_id, relative_path, version, observed_at FROM plugin_roca_
 roca exec 'SELECT id, destination, generation, handled_generation, kind, created_at FROM plugin_roca_firstmate.wakeups ORDER BY generation'
 ```
 
-Schema source: [`schema/schema.sql`](schema/schema.sql). The visible tables are the five `*_versions` families, `homes`, `tasks`, `ingest_file_state`, `seats`, `wakeups`, and `chart_cache`. La Roca hides `plugin_schema` bookkeeping. The semantic fragment lists every visible table, including seats. The vector fragment indexes only family `content`.
+Schema source: [`schema/schema.sql`](schema/schema.sql). The visible tables are the five `*_versions` families, `homes`, `tasks`, `ingest_file_state`, `seats`, `wakeups`, and `chart_cache`. La Roca hides `plugin_schema` bookkeeping. [`plugin.json`](plugin.json) owns the semantic and vector declarations; `schema/package_test.go` enforces their parity and selectivity.
 
 ## Install and verify
 
@@ -140,7 +140,7 @@ make sync-db
 ## Layout
 
 ```text
-plugin.json              # identity, database declaration, semantic fragment, embeddings-only vector fragment
+plugin.json              # identity, database, semantic, and vector declarations
 firstmate.db             # empty schema, operator-owned after installation
 schema/schema.sql        # source of truth for firstmate.db
 cmd/roca-firstmate/      # attach, follow, tick, chart, and Scribe verbs
