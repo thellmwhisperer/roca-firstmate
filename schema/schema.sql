@@ -1,4 +1,4 @@
--- firstmate.db schema version 2.
+-- firstmate.db schema version 3.
 --
 -- Five markdown inventory families, each stored as a versioned mirror:
 -- every observed rewrite of a file is a new row, and the current file is
@@ -20,7 +20,7 @@ CREATE TABLE plugin_schema (
 );
 
 INSERT INTO plugin_schema (singleton, plugin_name, schema_version, index_version)
-VALUES (1, 'roca-firstmate', 2, 1);
+VALUES (1, 'roca-firstmate', 3, 1);
 
 CREATE TABLE homes (
   home_id TEXT PRIMARY KEY,
@@ -218,18 +218,22 @@ CREATE INDEX ingest_file_state_source_agent
   ON ingest_file_state(source_agent);
 
 -- Nerve destination queue. Scribe's AFTER INSERT triggers populate companion
--- wakeups; Nerve's later process consumes and routes them.
--- v1 destinations are machine and companion. Mobile is later.
+-- wakeups; Nerve consumes them by destination. Mobile is later.
 CREATE TABLE wakeups (
   id INTEGER PRIMARY KEY,
-  destination TEXT NOT NULL CHECK (destination IN ('machine', 'companion')),
+  destination TEXT NOT NULL CHECK (destination IN ('captain', 'companion', 'machine')),
   handled INTEGER NOT NULL DEFAULT 0 CHECK (handled IN (0, 1)),
   generation INTEGER NOT NULL,
+  handled_generation INTEGER,
   kind TEXT NOT NULL DEFAULT '',
   home_id TEXT REFERENCES homes(home_id),
   task_id TEXT,
   payload TEXT NOT NULL DEFAULT '',
-  created_at TEXT NOT NULL
+  created_at TEXT NOT NULL,
+  CHECK (
+    (handled = 0 AND handled_generation IS NULL)
+    OR (handled = 1 AND handled_generation IS NOT NULL AND handled_generation = generation)
+  )
 );
 
 CREATE INDEX wakeups_unhandled
@@ -237,6 +241,25 @@ CREATE INDEX wakeups_unhandled
 
 CREATE INDEX wakeups_generation
   ON wakeups(generation);
+
+-- A seat is an attached workspace subscription. workspace_fingerprint is an
+-- opaque hash; absolute workspace paths never enter the federated database.
+-- Leases make orphan recovery and the silence clock entirely persistent.
+CREATE TABLE seats (
+  seat_id TEXT PRIMARY KEY,
+  home_id TEXT NOT NULL REFERENCES homes(home_id),
+  workspace_fingerprint TEXT NOT NULL,
+  label TEXT NOT NULL,
+  destination TEXT NOT NULL CHECK (destination IN ('captain', 'companion', 'machine')),
+  attached_at TEXT NOT NULL,
+  last_seen_at TEXT NOT NULL,
+  lease_until TEXT NOT NULL,
+  silence_generation INTEGER NOT NULL DEFAULT 0 CHECK (silence_generation >= 0),
+  UNIQUE (home_id, workspace_fingerprint)
+);
+
+CREATE INDEX seats_destination_lease
+  ON seats(destination, lease_until);
 
 -- Scribe's causal boundary is SQL, not inference: every mirrored version row
 -- produces one companion wakeup in the same transaction. Nerve consumes and

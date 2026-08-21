@@ -6,10 +6,10 @@ Public normative La Roca plugin example. It ships `firstmate.db` as an external 
 
 - Payload the installer verifies is exactly `plugin.json` and `firstmate.db`. Source of the database is `schema/schema.sql`.
 - Five markdown families are versioned: every rewrite is a new row, `is_current` marks the latest file. Schema: `schema/schema.sql`.
-- `wakeups` and Scribe's insert triggers ship now (Nerve consumer/routing later). v1 destinations are `machine` and `companion` only. `chart_cache` holds the on-demand AXI chart and its watermark. Distiller is deleted.
+- `wakeups`, Scribe's insert triggers, and Nerve v1 ship now. Destinations are `captain`, `companion`, and `machine`; mobile is later. `attach` is the default foreground subscription, `follow` listens to the WAL, and ephemeral `tick` owns silence/orphan recovery. No default daemon or KeepAlive. `chart_cache` holds the on-demand AXI chart and its watermark. Distiller is deleted.
 - Do not install this plugin onto a live captain La Roca. Prove the payload with `make check`.
-- `roca-firstmate chart` is get-or-create: generate, serve cached, or regenerate. Bounded TOON, `help[]`, `--json`. Nothing runs when a session opens.
-- Dresser (`skills/dresser/SKILL.md`) is a skill, not a hook: chart first, SQL for history, firstmate only through its conversation door.
+- `roca-firstmate chart` is get-or-create: generate, serve cached, or regenerate. Bounded TOON, `help[]`, `--json`. Every plugin verb performs Scribe's fingerprint sweep before answering.
+- Dresser (`skills/dresser/SKILL.md`) is a skill, not a hook: attach first, choose the harness latency recipe, SQL for history, firstmate only through its conversation door.
 - Scribe mirrors every Markdown file under `home/data`: FSEvents first on macOS, polling fallback, one-shot fingerprint scan as initial backfill and nightly safety net. The transactional chain is file event -> version row -> SQL trigger -> wakeup. Implementation: `internal/scribe/`, `internal/watch/`.
 - Backlog and per-task Markdown are mirrored for history and cross-references only. `tasks-axi` stays the query layer.
 - `state/` telemetry is out of v1. Leave `status_events`, `task_meta`, and `wake_queue` free for an additive later schema.
