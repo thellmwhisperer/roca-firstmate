@@ -56,7 +56,7 @@ roca plugin install thellmwhisperer/roca-firstmate
 
 Or install from a local checkout of this repository. The installer verifies `checksums.txt` (exactly `plugin.json` and `firstmate.db`), shows a DATA-ONLY consent screen, and copies the package under the operator's plugin directory. Because the database declares `custody: true`, uninstall archives it instead of deleting it.
 
-This repository's tests and agents do not install the plugin onto a live captain La Roca. Prove the payload with `make check` and `make sync-db`.
+This repository's tests and agents do not install the plugin onto a live captain La Roca. Prove the payload with `make check`; use `make sync-db` only to rebuild the database and checksums after changing their sources.
 
 Prove the empty schema with gated SQL (zero rows until a later Scribe writes a home):
 
