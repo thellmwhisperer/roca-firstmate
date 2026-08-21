@@ -82,12 +82,61 @@ func TestRegisterSeatStoresOnlyOpaqueWorkspaceIdentity(t *testing.T) {
 	if !strings.HasPrefix(seat.SeatID, "seat-") {
 		t.Fatalf("seat id %q", seat.SeatID)
 	}
+	if seat.Label != seat.SeatID || strings.Contains(seat.Label, "lantern-workspace") {
+		t.Fatalf("default label %q is not opaque", seat.Label)
+	}
 	var fingerprint string
 	if err := db.QueryRow(`SELECT workspace_fingerprint FROM seats WHERE seat_id = ?`, seat.SeatID).Scan(&fingerprint); err != nil {
 		t.Fatal(err)
 	}
 	if strings.Contains(fingerprint, workspace) || len(fingerprint) != 64 {
 		t.Fatalf("workspace fingerprint %q leaks or is not SHA-256", fingerprint)
+	}
+}
+
+func TestRegisterSeatKeepsExplicitIdentityOutOfDefaultLabel(t *testing.T) {
+	db := appliedDB(t)
+	seedHome(t, db)
+	seat, err := nerve.RegisterSeat(context.Background(), db, nerve.SeatConfig{
+		SeatID: "operator-chosen-seat", HomeID: "northwind-harbor",
+		Workspace:   filepath.Join(t.TempDir(), "lantern-workspace"),
+		Destination: "companion", Now: frozen,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if seat.Label == seat.SeatID || !strings.HasPrefix(seat.Label, "seat-") {
+		t.Fatalf("default label %q exposes explicit seat identity %q", seat.Label, seat.SeatID)
+	}
+}
+
+func TestTickDoesNotDrainWakeupsOwnedByLiveSeat(t *testing.T) {
+	db := appliedDB(t)
+	seedHome(t, db)
+	if _, err := nerve.RegisterSeat(context.Background(), db, nerve.SeatConfig{
+		HomeID: "northwind-harbor", Workspace: filepath.Join(t.TempDir(), "lantern-workspace"),
+		Destination: "companion", Now: frozen,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	mustExec(t, db, `INSERT INTO wakeups (
+		destination, generation, kind, home_id, payload, created_at
+	) VALUES ('companion', 1, 'ready', 'northwind-harbor', 'fabricated', '2026-03-14T09:00:00Z')`)
+
+	var output bytes.Buffer
+	result, err := nerve.Tick(context.Background(), db, frozen, 5*time.Minute, &output)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.OrphanWakeups != 0 || output.Len() != 0 {
+		t.Fatalf("live destination drained: %+v output=%q", result, output.String())
+	}
+	var handled int
+	if err := db.QueryRow(`SELECT handled FROM wakeups WHERE generation = 1`).Scan(&handled); err != nil {
+		t.Fatal(err)
+	}
+	if handled != 0 {
+		t.Fatalf("live destination wakeup handled=%d", handled)
 	}
 }
 
@@ -141,6 +190,52 @@ func TestTickRunsPersistentSilenceClockAndDrainsOrphans(t *testing.T) {
 	}
 }
 
+func TestTickClaimsSilenceGenerationOnceAcrossConcurrentRuns(t *testing.T) {
+	db := appliedDB(t)
+	seedHome(t, db)
+	if _, err := nerve.RegisterSeat(context.Background(), db, nerve.SeatConfig{
+		HomeID: "northwind-harbor", Workspace: filepath.Join(t.TempDir(), "lantern-workspace"),
+		Destination: "companion", Now: frozen.Add(-10 * time.Minute),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	type outcome struct {
+		result nerve.TickResult
+		err    error
+	}
+	start := make(chan struct{})
+	outcomes := make(chan outcome, 2)
+	for range 2 {
+		go func() {
+			<-start
+			var output bytes.Buffer
+			result, err := nerve.Tick(context.Background(), db, frozen, 5*time.Minute, &output)
+			outcomes <- outcome{result: result, err: err}
+		}()
+	}
+	close(start)
+
+	created := 0
+	for range 2 {
+		outcome := <-outcomes
+		if outcome.err != nil {
+			t.Fatalf("concurrent tick: %v", outcome.err)
+		}
+		created += outcome.result.SilenceWakeups
+	}
+	if created != 1 {
+		t.Fatalf("concurrent ticks created %d silence wakeups", created)
+	}
+	var rows int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM wakeups WHERE kind = 'seat-silent'`).Scan(&rows); err != nil {
+		t.Fatal(err)
+	}
+	if rows != 1 {
+		t.Fatalf("seat-silent rows = %d, want 1", rows)
+	}
+}
+
 func TestLastHandoffUsesLatestCurrentVersion(t *testing.T) {
 	db := appliedDB(t)
 	seedHome(t, db)
@@ -167,7 +262,7 @@ func (failingWriter) Write([]byte) (int, error) { return 0, errors.New("fabricat
 
 func appliedDB(t *testing.T) *sql.DB {
 	t.Helper()
-	db, err := sql.Open("sqlite", "file:"+filepath.Join(t.TempDir(), "firstmate.db")+"?_pragma=foreign_keys(1)")
+	db, err := sql.Open("sqlite", "file:"+filepath.Join(t.TempDir(), "firstmate.db")+"?_pragma=foreign_keys(1)&_pragma=busy_timeout(5000)")
 	if err != nil {
 		t.Fatal(err)
 	}

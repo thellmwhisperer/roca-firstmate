@@ -57,7 +57,7 @@ roca-firstmate attach
 Running `roca-firstmate` without a subcommand is equivalent. Attach:
 
 1. Reconciles Markdown fingerprints and ingests changes.
-2. Registers the workspace as a firstmate seat. Only a SHA-256 fingerprint is stored, never the path.
+2. Registers the workspace as a firstmate seat. Only a SHA-256 fingerprint and opaque default label are stored, never the path; `--label` opts into a human-readable label.
 3. Prints the chart get-or-create and the latest mirrored handoff.
 4. Drains pending wakeups for the seat destination.
 5. Subscribes to database/WAL changes in the same foreground gesture.
@@ -72,7 +72,9 @@ Attaching is subscribing. There is no init ceremony.
 roca-firstmate follow --destination companion
 ```
 
-For every unhandled row of its destination, follow writes exactly one JSON line to stdout. The claim and stdout write share a transaction: output failure rolls the claim back. After stdout accepts the line, Nerve commits `handled = 1` and `handled_generation = generation`. A generation can therefore be retried without being silently lost.
+For each delivery attempt, follow writes one JSON line to stdout before committing `handled = 1` and `handled_generation = generation`. Output failure rolls the claim back. Process death or commit failure after a successful write can emit the same line again, so delivery across the stdout/SQLite boundary is at-least-once, never cross-system exactly-once. Adapters deduplicate retries by `(destination, generation)`.
+
+Direct `follow` derives an opaque seat from the current workspace unless `--workspace` or `--seat-id` is supplied, registers or refreshes that seat, and heartbeats its lease while connected. During an adapter handoff, `attach` and direct `follow` are mutually exclusive subscription owners for the same workspace and destination: stop one before starting the other so they cannot race to consume the queue.
 
 Dresser documents three adapter recipes and their intended latency:
 

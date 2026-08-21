@@ -1,16 +1,16 @@
 /*
 *
-@overview Deterministic Nerve routing for firstmate.db. ~480 lines, 11 public symbols.
+@overview Deterministic Nerve routing for firstmate.db. ~490 lines, 11 public symbols.
 
 		READING GUIDE
 		-------------
 		1. Start at Follow                   <- WAL-driven subscription loop
-		2. Read Drain                        <- atomic one-line delivery contract
+		2. Read Drain                        <- no-loss at-least-once delivery boundary
 		3. Read Tick                         <- ephemeral silence/orphan reconciliation
 
 		MAIN FLOW
 		---------
-		RegisterSeat -> Follow -> Drain -> generation-confirmed wakeup
+		RegisterSeat -> Follow -> Drain -> at-least-once generation-confirmed wakeup
 
 		PUBLIC API
 		----------
@@ -28,7 +28,7 @@
 
 		INTERNALS
 		---------
-		heartbeat, silenceClock, orphanDestinations, claimNext, nextGeneration
+		heartbeat, silenceClock, drainOrphans, drainDestination, claimNext, nextGeneration
 
 @exports SeatConfig, Seat, Handoff, Wakeup, TickResult, WorkspaceSeatID, RegisterSeat, LastHandoff, Follow, Drain, Tick
 @deps database/sql queue state; encoding/json one-line envelopes; filesystem watcher in wal_*.go
@@ -133,11 +133,12 @@ func RegisterSeat(ctx context.Context, db *sql.DB, config SeatConfig) (Seat, err
 	if err != nil {
 		return Seat{}, err
 	}
+	opaqueLabel := seatID
 	if strings.TrimSpace(config.SeatID) != "" {
 		seatID = strings.TrimSpace(config.SeatID)
 	}
 	if strings.TrimSpace(config.Label) == "" {
-		config.Label = filepath.Base(config.Workspace)
+		config.Label = opaqueLabel
 	}
 	if !validDestination(config.Destination) {
 		return Seat{}, fmt.Errorf("destination %q must be captain, companion, or machine", config.Destination)
@@ -202,26 +203,28 @@ func LastHandoff(ctx context.Context, db *sql.DB) (*Handoff, error) {
 
 // -/ 1/4
 
-// -- 2/4 CORE · Follow and atomic one-line delivery -- <- START HERE
+// -- 2/4 CORE · Follow and at-least-once one-line delivery -- <- START HERE
 
 // Follow drains the current destination, then listens for database/WAL changes.
-// A seat id enables durable heartbeat leases for tick's orphan calculation.
+// Its registered seat owns and heartbeats the destination subscription.
 func Follow(ctx context.Context, db *sql.DB, dbPath, destination, seatID string, w io.Writer) error {
 	if !validDestination(destination) {
 		return fmt.Errorf("destination %q must be captain, companion, or machine", destination)
+	}
+	seatID = strings.TrimSpace(seatID)
+	if seatID == "" {
+		return errors.New("follow requires a registered seat")
 	}
 	source, err := newWALSource(dbPath)
 	if err != nil {
 		return fmt.Errorf("watch database WAL: %w", err)
 	}
 	defer source.Close()
-	if _, err := Drain(ctx, db, []string{destination}, w); err != nil {
+	if err := heartbeat(ctx, db, seatID, time.Now().UTC()); err != nil {
 		return err
 	}
-	if seatID != "" {
-		if err := heartbeat(ctx, db, seatID, time.Now().UTC()); err != nil {
-			return err
-		}
+	if _, err := Drain(ctx, db, []string{destination}, w); err != nil {
+		return err
 	}
 	ticker := time.NewTicker(heartbeatInterval)
 	defer ticker.Stop()
@@ -242,50 +245,76 @@ func Follow(ctx context.Context, db *sql.DB, dbPath, destination, seatID string,
 				return err
 			}
 		case now := <-ticker.C:
-			if seatID != "" {
-				if err := heartbeat(ctx, db, seatID, now.UTC()); err != nil {
-					return err
-				}
+			if err := heartbeat(ctx, db, seatID, now.UTC()); err != nil {
+				return err
 			}
 		}
 	}
 }
 
-// Drain prints exactly one JSON line for each claimed wakeup, then commits its
-// handled generation. Output failure rolls the claim back for safe retry.
+// Drain writes one JSON line for each delivery attempt, then commits its
+// handled generation. Output failure rolls the claim back. Process death or a
+// commit failure after a successful write can repeat the line, so adapters
+// deduplicate at-least-once delivery by destination and generation.
 func Drain(ctx context.Context, db *sql.DB, destinations []string, w io.Writer) (int, error) {
 	total := 0
 	for _, destination := range destinations {
 		if !validDestination(destination) {
 			return total, fmt.Errorf("destination %q must be captain, companion, or machine", destination)
 		}
-		for {
-			wakeup, tx, err := claimNext(ctx, db, destination)
-			if err != nil {
-				return total, err
-			}
-			if wakeup == nil {
-				break
-			}
-			raw, err := json.Marshal(wakeup)
-			if err != nil {
-				_ = tx.Rollback()
-				return total, fmt.Errorf("render wakeup: %w", err)
-			}
-			if _, err := fmt.Fprintln(w, string(raw)); err != nil {
-				_ = tx.Rollback()
-				return total, fmt.Errorf("deliver wakeup generation %d: %w", wakeup.Generation, err)
-			}
-			if err := tx.Commit(); err != nil {
-				return total, fmt.Errorf("confirm wakeup generation %d: %w", wakeup.Generation, err)
-			}
-			total++
+		drained, err := drainDestination(ctx, db, destination, "", w)
+		if err != nil {
+			return total, err
 		}
+		total += drained
 	}
 	return total, nil
 }
 
-func claimNext(ctx context.Context, db *sql.DB, destination string) (*Wakeup, *sql.Tx, error) {
+func drainOrphans(ctx context.Context, db *sql.DB, now time.Time, w io.Writer) (int, []string, error) {
+	total := 0
+	var destinations []string
+	cutoff := now.UTC().Format(time.RFC3339Nano)
+	for _, destination := range []string{"captain", "companion", "machine"} {
+		drained, err := drainDestination(ctx, db, destination, cutoff, w)
+		if err != nil {
+			return total, destinations, err
+		}
+		if drained != 0 {
+			destinations = append(destinations, destination)
+			total += drained
+		}
+	}
+	return total, destinations, nil
+}
+
+func drainDestination(ctx context.Context, db *sql.DB, destination, orphanCutoff string, w io.Writer) (int, error) {
+	total := 0
+	for {
+		wakeup, tx, err := claimNext(ctx, db, destination, orphanCutoff)
+		if err != nil {
+			return total, err
+		}
+		if wakeup == nil {
+			return total, nil
+		}
+		raw, err := json.Marshal(wakeup)
+		if err != nil {
+			_ = tx.Rollback()
+			return total, fmt.Errorf("render wakeup: %w", err)
+		}
+		if _, err := fmt.Fprintln(w, string(raw)); err != nil {
+			_ = tx.Rollback()
+			return total, fmt.Errorf("deliver wakeup generation %d: %w", wakeup.Generation, err)
+		}
+		if err := tx.Commit(); err != nil {
+			return total, fmt.Errorf("confirm wakeup generation %d: %w", wakeup.Generation, err)
+		}
+		total++
+	}
+}
+
+func claimNext(ctx context.Context, db *sql.DB, destination, orphanCutoff string) (*Wakeup, *sql.Tx, error) {
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, nil, fmt.Errorf("begin wakeup claim: %w", err)
@@ -293,12 +322,17 @@ func claimNext(ctx context.Context, db *sql.DB, destination string) (*Wakeup, *s
 	row := tx.QueryRowContext(ctx, `UPDATE wakeups
 	SET handled = 1, handled_generation = generation
 	WHERE id = (
-		SELECT id FROM wakeups
-		WHERE handled = 0 AND destination = ?
+		SELECT w.id FROM wakeups w
+		WHERE w.handled = 0 AND w.destination = ?
+		AND (? = '' OR NOT EXISTS (
+			SELECT 1 FROM seats s
+			WHERE s.destination = w.destination AND s.lease_until > ?
+		))
 		ORDER BY generation, id LIMIT 1
 	) AND handled = 0
 	RETURNING id, destination, generation, handled_generation, kind,
-		COALESCE(home_id, ''), COALESCE(task_id, ''), payload, created_at`, destination)
+		COALESCE(home_id, ''), COALESCE(task_id, ''), payload, created_at`,
+		destination, orphanCutoff, orphanCutoff)
 	var wakeup Wakeup
 	if err := row.Scan(
 		&wakeup.ID, &wakeup.Destination, &wakeup.Generation, &wakeup.HandledGeneration,
@@ -330,11 +364,7 @@ func Tick(ctx context.Context, db *sql.DB, now time.Time, silenceAfter time.Dura
 	if err != nil {
 		return TickResult{}, err
 	}
-	destinations, err := orphanDestinations(ctx, db, now)
-	if err != nil {
-		return TickResult{}, err
-	}
-	drained, err := Drain(ctx, db, destinations, w)
+	drained, destinations, err := drainOrphans(ctx, db, now, w)
 	if err != nil {
 		return TickResult{}, err
 	}
@@ -391,16 +421,29 @@ func silenceClock(ctx context.Context, db *sql.DB, now time.Time, silenceAfter t
 		if err != nil {
 			return created, err
 		}
+		claim, err := tx.ExecContext(ctx, `UPDATE seats SET silence_generation = ?
+			WHERE seat_id = ? AND last_seen_at = ? AND lease_until <= ?
+			AND silence_generation < ?`, generation, seat.seatID, seat.lastSeen,
+			now.Format(time.RFC3339Nano), generation)
+		if err != nil {
+			_ = tx.Rollback()
+			return created, fmt.Errorf("claim seat silence: %w", err)
+		}
+		claimed, err := claim.RowsAffected()
+		if err != nil {
+			_ = tx.Rollback()
+			return created, err
+		}
+		if claimed == 0 {
+			_ = tx.Rollback()
+			continue
+		}
 		wakeGeneration, err := nextGeneration(ctx, tx)
 		if err == nil {
 			_, err = tx.ExecContext(ctx, `INSERT INTO wakeups (
 				destination, generation, kind, home_id, payload, created_at
 			) VALUES ('captain', ?, 'seat-silent', ?, ?, ?)`,
 				wakeGeneration, seat.homeID, string(payload), now.Format(time.RFC3339Nano))
-		}
-		if err == nil {
-			_, err = tx.ExecContext(ctx, `UPDATE seats SET silence_generation = ?
-				WHERE seat_id = ? AND silence_generation < ?`, generation, seat.seatID, generation)
 		}
 		if err != nil {
 			_ = tx.Rollback()
@@ -412,28 +455,6 @@ func silenceClock(ctx context.Context, db *sql.DB, now time.Time, silenceAfter t
 		created++
 	}
 	return created, nil
-}
-
-func orphanDestinations(ctx context.Context, db *sql.DB, now time.Time) ([]string, error) {
-	rows, err := db.QueryContext(ctx, `SELECT DISTINCT w.destination
-	FROM wakeups w
-	WHERE w.handled = 0 AND NOT EXISTS (
-		SELECT 1 FROM seats s
-		WHERE s.destination = w.destination AND s.lease_until > ?
-	) ORDER BY w.destination`, now.Format(time.RFC3339Nano))
-	if err != nil {
-		return nil, fmt.Errorf("read orphan destinations: %w", err)
-	}
-	defer rows.Close()
-	var destinations []string
-	for rows.Next() {
-		var destination string
-		if err := rows.Scan(&destination); err != nil {
-			return nil, err
-		}
-		destinations = append(destinations, destination)
-	}
-	return destinations, rows.Err()
 }
 
 func nextGeneration(ctx context.Context, tx *sql.Tx) (int64, error) {

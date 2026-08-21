@@ -22,13 +22,15 @@ export FIRSTMATE_HOME_ID='local-primary'
 roca-firstmate attach
 ```
 
-This is the complete default gesture. It fingerprint-sweeps Markdown and ingests changes before answering, registers an opaque workspace seat without storing the workspace path, prints the chart get-or-create plus the latest handoff, drains pending `companion` wakeups, and follows the database WAL. Attaching is subscribing. No init, resident daemon, or KeepAlive service is implied.
+This is the complete default gesture. It fingerprint-sweeps Markdown and ingests changes before answering, registers an opaque workspace seat without storing the workspace path, prints the chart get-or-create plus the latest handoff, drains pending `companion` wakeups, and follows the database WAL. The seat label stays opaque unless the operator explicitly supplies `--label`. Attaching is subscribing. No init, resident daemon, or KeepAlive service is implied.
 
 Every other plugin verb also performs the fingerprint sweep before it answers. `roca-firstmate chart` is still available when only the current chart is needed. Use `--json` for its complete envelope.
 
 ## 2. Wakeups follow: choose one latency recipe
 
-`roca-firstmate follow --destination companion` listens to `firstmate.db-wal`. Each unhandled row for that destination becomes exactly one JSON line on stdout; only after stdout accepts the line does Nerve mark it handled with the same generation. Carry that line unchanged into the harness wake mechanism.
+`roca-firstmate follow --destination companion` derives and registers an opaque seat for the current workspace, heartbeats its lease, and listens to `firstmate.db-wal`. Each delivery attempt writes one JSON line before Nerve commits the handled generation. If the process dies or the commit fails after stdout accepts the line, that `(destination, generation)` can appear again: delivery across stdout and SQLite is at-least-once, never cross-system exactly-once. The adapter must deduplicate by destination plus generation before carrying the line into the harness wake mechanism.
+
+`attach` and direct `follow` are mutually exclusive subscription owners during adapter handoff. Stop attach before starting a follow adapter for the same workspace and destination, and stop follow before returning ownership to attach, so two processes never race to consume that destination.
 
 ### Native: milliseconds
 
