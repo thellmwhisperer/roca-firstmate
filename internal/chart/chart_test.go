@@ -3,6 +3,7 @@ package chart_test
 import (
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -165,6 +166,39 @@ func TestFilterRestrictsChartToOneHome(t *testing.T) {
 	}
 	if len(unfiltered.Homes) != 2 {
 		t.Fatalf("empty filter should keep all homes %+v", unfiltered.Homes)
+	}
+}
+
+func TestFilterAppliesHomeBeforeBoundedLimit(t *testing.T) {
+	db := appliedDB(t)
+	if _, err := db.Exec(`INSERT INTO homes (home_id, label, kind, recorded_at) VALUES
+		('a-harbor', 'Harbor', 'primary', '2026-03-14T09:00:00Z'),
+		('z-skiff', 'Skiff', 'secondmate', '2026-03-14T09:00:00Z')`); err != nil {
+		t.Fatalf("seed homes: %v", err)
+	}
+	for i := 0; i < 20; i++ {
+		if _, err := db.Exec(`INSERT INTO operational_doc_versions
+			(home_id, relative_path, document_kind, version, is_current, content, content_sha256, observed_at)
+			VALUES ('a-harbor', ?, 'brief', 1, 1, 'h', ?, '2026-03-14T09:00:00Z')`,
+			fmt.Sprintf("%02d.md", i), fmt.Sprintf("h-%02d", i)); err != nil {
+			t.Fatalf("seed harbor row %d: %v", i, err)
+		}
+	}
+	if _, err := db.Exec(`INSERT INTO operational_doc_versions
+		(home_id, relative_path, document_kind, version, is_current, content, content_sha256, observed_at)
+		VALUES ('z-skiff', 'decision-1.md', 'decision', 1, 1, 's', 's-sha', '2026-03-14T09:00:00Z')`); err != nil {
+		t.Fatalf("seed skiff: %v", err)
+	}
+	result, err := chart.GetOrCreate(db, frozen)
+	if err != nil {
+		t.Fatal(err)
+	}
+	filtered, err := chart.Filter(db, result, "z-skiff")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(filtered.OperationalDocs) != 1 || filtered.OperationalDocs[0].HomeID != "z-skiff" {
+		t.Fatalf("operational docs %+v", filtered.OperationalDocs)
 	}
 }
 
