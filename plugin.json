@@ -1,0 +1,151 @@
+{
+  "schema": 1,
+  "name": "roca-firstmate",
+  "version": "0.1.0",
+  "binary": "roca",
+  "databases": [
+    {
+      "name": "firstmate",
+      "path": "firstmate.db",
+      "alias": "plugin_roca_firstmate",
+      "attachment": "on-demand",
+      "custody": true,
+      "retention": "Keep mirrored firstmate-home documents until the operator uninstalls the plugin or deletes firstmate.db. Uninstall archives the database because it holds operator-owned fleet records. The plugin never prunes another plugin's history."
+    }
+  ],
+  "semantic": {
+    "databases": [
+      {
+        "database": "firstmate",
+        "description": "Versioned mirror of a firstmate home's markdown inventory: startup working set, archives, task state, one-shot operational docs, and per-task artifacts. Every rewrite is a new row; the current file is the latest version.",
+        "questions": [
+          "What did the firstmate home mirror record?",
+          "Which firstmate working-set files, archives, task state, operational docs, or per-task artifacts were mirrored?"
+        ],
+        "tables": [
+          {
+            "name": "homes",
+            "description": "Firstmate homes whose markdown inventory is mirrored into this database.",
+            "questions": [
+              "Which firstmate homes are mirrored?"
+            ],
+            "columns": [
+              "home_id",
+              "label",
+              "kind",
+              "recorded_at"
+            ]
+          },
+          {
+            "name": "tasks",
+            "description": "Task identities kept for cross-references. The backlog query layer stays in tasks-axi; this table does not replace it.",
+            "questions": [
+              "Which task ids are mirrored for cross-references?"
+            ],
+            "columns": [
+              "home_id",
+              "task_id"
+            ]
+          },
+          {
+            "name": "working_set_versions",
+            "description": "Versioned startup working set: captain.md, captain-shared.md, learnings.md, projects.md, and secondmates.md. Each rewrite is a new row; is_current marks the latest file.",
+            "questions": [
+              "What is in the firstmate startup working set?",
+              "Which versions of captain.md were mirrored?"
+            ],
+            "columns": [
+              "id",
+              "home_id",
+              "relative_path",
+              "document_kind",
+              "version",
+              "is_current",
+              "content",
+              "content_sha256",
+              "observed_at",
+              "source_mtime"
+            ]
+          },
+          {
+            "name": "archive_versions",
+            "description": "Versioned stow archives: captain-archive.md, memory-archive.md, and note-archive.md.",
+            "questions": [
+              "Which firstmate archives were mirrored?"
+            ],
+            "columns": [
+              "id",
+              "home_id",
+              "relative_path",
+              "document_kind",
+              "version",
+              "is_current",
+              "content",
+              "content_sha256",
+              "observed_at",
+              "source_mtime"
+            ]
+          },
+          {
+            "name": "task_state_versions",
+            "description": "Versioned backlog.md and done-archive.md, mirrored for cross-references only.",
+            "questions": [
+              "Which backlog or done-archive versions are mirrored?"
+            ],
+            "columns": [
+              "id",
+              "home_id",
+              "relative_path",
+              "document_kind",
+              "version",
+              "is_current",
+              "content",
+              "content_sha256",
+              "observed_at",
+              "source_mtime"
+            ]
+          },
+          {
+            "name": "operational_doc_versions",
+            "description": "Versioned one-shot dated operational docs at the data root. document_kind is the filename prefix (decision, order, brief, status, planning, handover, postmortem, and later prefixes).",
+            "questions": [
+              "Which one-shot firstmate operational docs were mirrored?"
+            ],
+            "columns": [
+              "id",
+              "home_id",
+              "relative_path",
+              "document_kind",
+              "version",
+              "is_current",
+              "content",
+              "content_sha256",
+              "observed_at",
+              "source_mtime"
+            ]
+          },
+          {
+            "name": "task_artifact_versions",
+            "description": "Versioned per-task artifacts under data/<task-id>/, with a foreign key to the mirrored task id.",
+            "questions": [
+              "Which per-task firstmate artifacts were mirrored?"
+            ],
+            "columns": [
+              "id",
+              "home_id",
+              "task_id",
+              "relative_path",
+              "document_kind",
+              "version",
+              "is_current",
+              "content",
+              "content_sha256",
+              "observed_at",
+              "source_mtime"
+            ]
+          }
+        ]
+      }
+    ]
+  }
+}
