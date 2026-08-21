@@ -1,10 +1,13 @@
 package main
 
 import (
+	"context"
 	"database/sql"
+	"os"
 	"path/filepath"
 	"testing"
 
+	"github.com/thellmwhisperer/roca-firstmate/internal/scribe"
 	"github.com/thellmwhisperer/roca-firstmate/schema"
 	_ "modernc.org/sqlite"
 )
@@ -27,6 +30,32 @@ func TestOpenDatabaseMigratesFabricatedV1BeforeUse(t *testing.T) {
 		`DROP TRIGGER task_artifact_path_insert`,
 		`DROP TRIGGER task_artifact_path_update`,
 		`DROP TABLE ingest_file_state`,
+		`ALTER TABLE operational_doc_versions RENAME TO operational_doc_versions_v2`,
+		`CREATE TABLE operational_doc_versions (
+			id INTEGER PRIMARY KEY,
+			home_id TEXT NOT NULL REFERENCES homes(home_id),
+			relative_path TEXT NOT NULL CHECK (
+				relative_path NOT GLOB '*/*'
+				AND relative_path NOT GLOB '/*'
+				AND instr(relative_path, '..') = 0
+				AND relative_path NOT IN (
+					'captain.md', 'captain-shared.md', 'learnings.md', 'projects.md',
+					'secondmates.md', 'captain-archive.md', 'memory-archive.md',
+					'note-archive.md', 'backlog.md', 'done-archive.md'
+				)
+			),
+			document_kind TEXT NOT NULL,
+			version INTEGER NOT NULL CHECK (version >= 1),
+			is_current INTEGER NOT NULL CHECK (is_current IN (0, 1)),
+			content TEXT NOT NULL,
+			content_sha256 TEXT NOT NULL,
+			observed_at TEXT NOT NULL,
+			source_mtime TEXT,
+			UNIQUE (home_id, relative_path, version)
+		)`,
+		`DROP TABLE operational_doc_versions_v2`,
+		`CREATE UNIQUE INDEX operational_doc_current
+			ON operational_doc_versions(home_id, relative_path) WHERE is_current = 1`,
 		`ALTER TABLE task_artifact_versions RENAME TO task_artifact_versions_v2`,
 		`CREATE TABLE task_artifact_versions (
 			id INTEGER PRIMARY KEY,
@@ -62,6 +91,13 @@ func TestOpenDatabaseMigratesFabricatedV1BeforeUse(t *testing.T) {
 			'northwind-harbor', 'captain.md', 'captain', 1, 1,
 			'fabricated captain', 'aaa', '2026-03-14T09:00:00Z'
 		)`,
+		`INSERT INTO operational_doc_versions (
+			home_id, relative_path, document_kind, version, is_current,
+			content, content_sha256, observed_at
+		) VALUES (
+			'northwind-harbor', '2026-03-14-brief.md', 'brief', 1, 1,
+			'fabricated operational brief', 'aab', '2026-03-14T09:00:00Z'
+		)`,
 		`INSERT INTO task_artifact_versions (
 			home_id, task_id, relative_path, document_kind, version, is_current,
 			content, content_sha256, observed_at
@@ -92,9 +128,10 @@ func TestOpenDatabaseMigratesFabricatedV1BeforeUse(t *testing.T) {
 		t.Fatalf("schema version = %d, want 2", version)
 	}
 	for table, want := range map[string]int{
-		"working_set_versions":   1,
-		"task_artifact_versions": 1,
-		"ingest_file_state":      0,
+		"working_set_versions":     1,
+		"operational_doc_versions": 1,
+		"task_artifact_versions":   1,
+		"ingest_file_state":        0,
 	} {
 		var got int
 		if err := db.QueryRow(`SELECT COUNT(*) FROM ` + table).Scan(&got); err != nil {
@@ -116,8 +153,46 @@ func TestOpenDatabaseMigratesFabricatedV1BeforeUse(t *testing.T) {
 	if wakeupTriggers != 5 {
 		t.Fatalf("wakeup triggers = %d, want 5", wakeupTriggers)
 	}
+	var preserved string
+	if err := db.QueryRow(`SELECT content FROM operational_doc_versions
+		WHERE relative_path = '2026-03-14-brief.md'`).Scan(&preserved); err != nil {
+		t.Fatal(err)
+	}
+	if preserved != "fabricated operational brief" {
+		t.Fatalf("preserved operational content = %q", preserved)
+	}
 	if err := schema.Migrate(db); err != nil {
 		t.Fatalf("idempotent migration: %v", err)
+	}
+
+	home := filepath.Join(t.TempDir(), "northwind-harbor")
+	data := filepath.Join(home, "data")
+	if err := os.MkdirAll(data, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(data, "notes..md"), []byte("fabricated double-dot note\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ingester, err := scribe.New(context.Background(), db, scribe.Config{
+		Home: home, HomeID: "northwind-harbor", Kind: "primary",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := ingester.Backfill(context.Background())
+	if err != nil {
+		t.Fatalf("backfill double-dot root document: %v", err)
+	}
+	if result.OperationalDocs != 1 || result.Inserted != 1 {
+		t.Fatalf("double-dot root backfill = %+v", result)
+	}
+	var mirrored int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM operational_doc_versions
+		WHERE relative_path = 'notes..md' AND is_current = 1`).Scan(&mirrored); err != nil {
+		t.Fatal(err)
+	}
+	if mirrored != 1 {
+		t.Fatalf("double-dot current rows = %d, want 1", mirrored)
 	}
 
 	if _, err := db.Exec(`INSERT INTO tasks (home_id, task_id) VALUES ('northwind-harbor', 'task[1]')`); err != nil {
