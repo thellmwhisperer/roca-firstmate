@@ -70,6 +70,67 @@ func TestNewRowRegeneratesChart(t *testing.T) {
 	}
 }
 
+func TestHandledWakeupRegeneratesChart(t *testing.T) {
+	db := appliedDB(t)
+	if _, err := db.Exec(`INSERT INTO wakeups (destination, generation, created_at)
+		VALUES ('machine', 1, '2026-03-14T09:00:00Z')`); err != nil {
+		t.Fatalf("insert wakeup: %v", err)
+	}
+	first, err := chart.GetOrCreate(db, frozen)
+	if err != nil {
+		t.Fatalf("first: %v", err)
+	}
+	if first.WakeupsUnhandled != 1 {
+		t.Fatalf("unhandled wakeups %d, want 1", first.WakeupsUnhandled)
+	}
+	if _, err := db.Exec(`UPDATE wakeups SET handled = 1 WHERE id = 1`); err != nil {
+		t.Fatalf("handle wakeup: %v", err)
+	}
+	second, err := chart.GetOrCreate(db, frozen.Add(time.Minute))
+	if err != nil {
+		t.Fatalf("regenerate: %v", err)
+	}
+	if second.Status != "regenerated" || second.WakeupsUnhandled != 0 {
+		t.Fatalf("chart after handled wakeup: %+v", second)
+	}
+	if second.Watermark == first.Watermark {
+		t.Fatal("watermark did not move after handling a wakeup")
+	}
+}
+
+func TestMultiHomeRowsIncludeIdentityAndUseTotalOrder(t *testing.T) {
+	db := appliedDB(t)
+	if _, err := db.Exec(`INSERT INTO homes (home_id, label, kind, recorded_at) VALUES
+		('z-harbor', 'Z Harbor', 'primary', '2026-03-14T09:00:00Z'),
+		('a-harbor', 'A Harbor', 'secondmate', '2026-03-14T09:00:00Z');
+		INSERT INTO working_set_versions
+			(home_id, relative_path, document_kind, version, is_current, content, content_sha256, observed_at) VALUES
+		('z-harbor', 'captain.md', 'captain', 1, 1, 'z', 'z-sha', '2026-03-14T09:00:00Z'),
+		('a-harbor', 'captain.md', 'captain', 1, 1, 'a', 'a-sha', '2026-03-14T09:00:00Z');
+		INSERT INTO tasks (home_id, task_id) VALUES
+		('z-harbor', 'z-task'), ('a-harbor', 'a-task');
+		INSERT INTO task_artifact_versions
+			(home_id, task_id, relative_path, document_kind, version, is_current, content, content_sha256, observed_at) VALUES
+		('z-harbor', 'z-task', 'z-task/brief.md', 'brief', 1, 1, 'z', 'z-sha', '2026-03-14T09:00:00Z'),
+		('a-harbor', 'a-task', 'a-task/brief.md', 'brief', 1, 1, 'a', 'a-sha', '2026-03-14T09:00:00Z')`); err != nil {
+		t.Fatalf("seed homes: %v", err)
+	}
+	result, err := chart.GetOrCreate(db, frozen)
+	if err != nil {
+		t.Fatalf("get-or-create: %v", err)
+	}
+	if len(result.WorkingSet) != 2 || result.WorkingSet[0].HomeID != "a-harbor" || result.WorkingSet[1].HomeID != "z-harbor" {
+		t.Fatalf("working set order %+v", result.WorkingSet)
+	}
+	if len(result.Artifacts) != 2 || result.Artifacts[0].HomeID != "a-harbor" || result.Artifacts[1].HomeID != "z-harbor" {
+		t.Fatalf("artifact order %+v", result.Artifacts)
+	}
+	toon := chart.RenderTOON(result)
+	if !strings.Contains(toon, "working_set[2]{home_id,relative_path") {
+		t.Fatalf("TOON omits document home identity:\n%s", toon)
+	}
+}
+
 func TestTOONIsBoundedAndHasHelp(t *testing.T) {
 	db := appliedDB(t)
 	result, err := chart.GetOrCreate(db, frozen)

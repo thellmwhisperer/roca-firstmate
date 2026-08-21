@@ -3,6 +3,7 @@
 package chart
 
 import (
+	"crypto/sha256"
 	"database/sql"
 	"encoding/json"
 	"fmt"
@@ -37,6 +38,7 @@ type Home struct {
 
 // Doc is a current markdown file identity row, never the full content.
 type Doc struct {
+	HomeID       string `json:"home_id"`
 	RelativePath string `json:"relative_path"`
 	DocumentKind string `json:"document_kind"`
 	Version      int    `json:"version"`
@@ -67,7 +69,7 @@ type cachedBody struct {
 func HelpLines() []string {
 	return []string{
 		"Run `roca-firstmate chart --json` for the complete envelope",
-		"Run `roca exec 'SELECT relative_path, version, observed_at FROM plugin_roca_firstmate.working_set_versions WHERE is_current = 1 ORDER BY relative_path'` to list the current working set",
+		"Run `roca exec 'SELECT home_id, relative_path, version, observed_at FROM plugin_roca_firstmate.working_set_versions WHERE is_current = 1 ORDER BY home_id, relative_path'` to list the current working set",
 		"Run `roca exec 'SELECT id, destination, kind, created_at FROM plugin_roca_firstmate.wakeups WHERE handled = 0 ORDER BY id'` to list unhandled wakeups",
 	}
 }
@@ -75,7 +77,11 @@ func HelpLines() []string {
 // GetOrCreate returns the chart for db, creating or regenerating it when the
 // watermark no longer matches the stored cache.
 func GetOrCreate(db *sql.DB, now time.Time) (Result, error) {
-	wm, err := watermark(db)
+	body, err := snapshot(db)
+	if err != nil {
+		return Result{}, err
+	}
+	wm, err := watermark(db, body)
 	if err != nil {
 		return Result{}, err
 	}
@@ -84,7 +90,7 @@ func GetOrCreate(db *sql.DB, now time.Time) (Result, error) {
 		Scan(&storedWM, &storedBody, &storedAt)
 	switch {
 	case err == sql.ErrNoRows:
-		return store(db, "created", wm, now)
+		return store(db, "created", wm, body, now)
 	case err != nil:
 		return Result{}, fmt.Errorf("read chart_cache: %w", err)
 	case storedWM == wm:
@@ -94,15 +100,11 @@ func GetOrCreate(db *sql.DB, now time.Time) (Result, error) {
 		}
 		return resultOf("cached", storedWM, storedAt, body), nil
 	default:
-		return store(db, "regenerated", wm, now)
+		return store(db, "regenerated", wm, body, now)
 	}
 }
 
-func store(db *sql.DB, status, wm string, now time.Time) (Result, error) {
-	body, err := snapshot(db)
-	if err != nil {
-		return Result{}, err
-	}
+func store(db *sql.DB, status, wm string, body cachedBody, now time.Time) (Result, error) {
 	raw, err := json.Marshal(body)
 	if err != nil {
 		return Result{}, err
@@ -154,7 +156,7 @@ func resultOf(status, wm, generatedAt string, body cachedBody) Result {
 	}
 }
 
-func watermark(db *sql.DB) (string, error) {
+func watermark(db *sql.DB, body cachedBody) (string, error) {
 	type part struct {
 		name string
 		sql  string
@@ -168,6 +170,7 @@ func watermark(db *sql.DB) (string, error) {
 		{"operational_doc_versions", `SELECT COUNT(*), CAST(COALESCE(MAX(id), 0) AS TEXT) FROM operational_doc_versions`},
 		{"task_artifact_versions", `SELECT COUNT(*), CAST(COALESCE(MAX(id), 0) AS TEXT) FROM task_artifact_versions`},
 		{"wakeups", `SELECT COUNT(*), CAST(COALESCE(MAX(id), 0) AS TEXT) FROM wakeups`},
+		{"wakeups_unhandled", `SELECT COUNT(*), '' FROM wakeups WHERE handled = 0`},
 	}
 	var b strings.Builder
 	for i, part := range parts {
@@ -181,6 +184,11 @@ func watermark(db *sql.DB) (string, error) {
 		}
 		fmt.Fprintf(&b, "%s:%d:%s", part.name, count, max)
 	}
+	raw, err := json.Marshal(body)
+	if err != nil {
+		return "", fmt.Errorf("watermark snapshot: %w", err)
+	}
+	fmt.Fprintf(&b, "|snapshot:%x", sha256.Sum256(raw))
 	return b.String(), nil
 }
 
@@ -235,8 +243,8 @@ func queryHomes(db *sql.DB) ([]Home, error) {
 }
 
 func queryDocs(db *sql.DB, table string) ([]Doc, error) {
-	rows, err := db.Query(`SELECT relative_path, document_kind, version, observed_at
-		FROM `+table+` WHERE is_current = 1 ORDER BY relative_path LIMIT ?`, maxRows)
+	rows, err := db.Query(`SELECT home_id, relative_path, document_kind, version, observed_at
+		FROM `+table+` WHERE is_current = 1 ORDER BY home_id, relative_path LIMIT ?`, maxRows)
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", table, err)
 	}
@@ -244,7 +252,7 @@ func queryDocs(db *sql.DB, table string) ([]Doc, error) {
 	var out []Doc
 	for rows.Next() {
 		var doc Doc
-		if err := rows.Scan(&doc.RelativePath, &doc.DocumentKind, &doc.Version, &doc.ObservedAt); err != nil {
+		if err := rows.Scan(&doc.HomeID, &doc.RelativePath, &doc.DocumentKind, &doc.Version, &doc.ObservedAt); err != nil {
 			return nil, err
 		}
 		out = append(out, doc)
@@ -254,7 +262,7 @@ func queryDocs(db *sql.DB, table string) ([]Doc, error) {
 
 func queryArtifacts(db *sql.DB) ([]Artifact, error) {
 	rows, err := db.Query(`SELECT home_id, task_id, relative_path, document_kind, version, observed_at
-		FROM task_artifact_versions WHERE is_current = 1 ORDER BY relative_path LIMIT ?`, maxRows)
+		FROM task_artifact_versions WHERE is_current = 1 ORDER BY home_id, task_id, relative_path LIMIT ?`, maxRows)
 	if err != nil {
 		return nil, fmt.Errorf("task_artifact_versions: %w", err)
 	}
@@ -277,10 +285,10 @@ func RenderTOON(result Result) string {
 	fmt.Fprintf(&b, "watermark: %s\n", toonString(result.Watermark))
 	fmt.Fprintf(&b, "generated_at: %s\n", result.GeneratedAt)
 	writeTable(&b, "homes", []string{"home_id", "label", "kind"}, homesRows(result.Homes))
-	writeTable(&b, "working_set", []string{"relative_path", "document_kind", "version", "observed_at"}, docRows(result.WorkingSet))
-	writeTable(&b, "archives", []string{"relative_path", "document_kind", "version", "observed_at"}, docRows(result.Archives))
-	writeTable(&b, "task_state", []string{"relative_path", "document_kind", "version", "observed_at"}, docRows(result.TaskState))
-	writeTable(&b, "operational_docs", []string{"relative_path", "document_kind", "version", "observed_at"}, docRows(result.OperationalDocs))
+	writeTable(&b, "working_set", []string{"home_id", "relative_path", "document_kind", "version", "observed_at"}, docRows(result.WorkingSet))
+	writeTable(&b, "archives", []string{"home_id", "relative_path", "document_kind", "version", "observed_at"}, docRows(result.Archives))
+	writeTable(&b, "task_state", []string{"home_id", "relative_path", "document_kind", "version", "observed_at"}, docRows(result.TaskState))
+	writeTable(&b, "operational_docs", []string{"home_id", "relative_path", "document_kind", "version", "observed_at"}, docRows(result.OperationalDocs))
 	writeTable(&b, "artifacts", []string{"home_id", "task_id", "relative_path", "document_kind", "version", "observed_at"}, artifactRows(result.Artifacts))
 	fmt.Fprintf(&b, "wakeups_unhandled: %d\n", result.WakeupsUnhandled)
 	fmt.Fprintf(&b, "help[%d]:", len(result.Help))
@@ -309,7 +317,7 @@ func homesRows(homes []Home) [][]string {
 func docRows(docs []Doc) [][]string {
 	rows := make([][]string, len(docs))
 	for i, doc := range docs {
-		rows[i] = []string{doc.RelativePath, doc.DocumentKind, strconv.Itoa(doc.Version), doc.ObservedAt}
+		rows[i] = []string{doc.HomeID, doc.RelativePath, doc.DocumentKind, strconv.Itoa(doc.Version), doc.ObservedAt}
 	}
 	return rows
 }

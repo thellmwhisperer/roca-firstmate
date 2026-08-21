@@ -3,6 +3,7 @@ package main
 
 import (
 	"database/sql"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -47,6 +48,9 @@ func runChart(args []string, stdout, stderr io.Writer) int {
 	asJSON := fs.Bool("json", false, "print the complete envelope")
 	fs.Usage = func() { usage(stderr) }
 	if err := fs.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return exitOK
+		}
 		return exitUsage
 	}
 	if fs.NArg() != 0 {
