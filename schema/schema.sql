@@ -6,7 +6,8 @@
 --
 -- state/ telemetry is out of v1. Later additive tables such as
 -- status_events, task_meta, and wake_queue can land without rewriting
--- these family tables.
+-- these family tables. wakeups is Nerve's destination queue, not the
+-- firstmate state/.wake-queue file.
 --
 -- plugin_schema is La Roca hidden bookkeeping. It is omitted from the
 -- semantic fragment on purpose.
@@ -181,3 +182,34 @@ CREATE UNIQUE INDEX task_artifact_current
 
 CREATE INDEX task_artifact_task
   ON task_artifact_versions(home_id, task_id);
+
+-- Nerve destination queue. The AFTER INSERT trigger is later; this table
+-- ships now so Nerve can land without rewriting the inventory families.
+-- v1 destinations are machine and companion. Mobile is later.
+CREATE TABLE wakeups (
+  id INTEGER PRIMARY KEY,
+  destination TEXT NOT NULL CHECK (destination IN ('machine', 'companion')),
+  handled INTEGER NOT NULL DEFAULT 0 CHECK (handled IN (0, 1)),
+  generation INTEGER NOT NULL,
+  kind TEXT NOT NULL DEFAULT '',
+  home_id TEXT REFERENCES homes(home_id),
+  task_id TEXT,
+  payload TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL
+);
+
+CREATE INDEX wakeups_unhandled
+  ON wakeups(handled, destination) WHERE handled = 0;
+
+CREATE INDEX wakeups_generation
+  ON wakeups(generation);
+
+-- On-demand AXI chart cache. Not a Distiller file: get-or-create stores the
+-- last generated chart and the watermark of rows it covers. Session-start
+-- never writes this table.
+CREATE TABLE chart_cache (
+  singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+  watermark TEXT NOT NULL,
+  body TEXT NOT NULL,
+  generated_at TEXT NOT NULL
+);

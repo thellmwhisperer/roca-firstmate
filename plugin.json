@@ -17,10 +17,12 @@
     "databases": [
       {
         "database": "firstmate",
-        "description": "Versioned mirror of a firstmate home's markdown inventory: startup working set, archives, task state, one-shot operational docs, and per-task artifacts. Every rewrite is a new row; the current file is the latest version.",
+        "description": "Versioned mirror of a firstmate home's markdown inventory: startup working set, archives, task state, one-shot operational docs, and per-task artifacts. Every rewrite is a new row; the current file is the latest version. Also holds the Nerve wakeups queue and the on-demand AXI chart cache.",
         "questions": [
           "What did the firstmate home mirror record?",
-          "Which firstmate working-set files, archives, task state, operational docs, or per-task artifacts were mirrored?"
+          "Which firstmate working-set files, archives, task state, operational docs, or per-task artifacts were mirrored?",
+          "Which firstmate wakeups are unhandled?",
+          "What is the last generated firstmate chart?"
         ],
         "tables": [
           {
@@ -142,6 +144,37 @@
               "content_sha256",
               "observed_at",
               "source_mtime"
+            ]
+          },
+          {
+            "name": "wakeups",
+            "description": "Nerve destination queue for v1: machine or companion. handled and generation support idempotent recovery. Nerve's writer lands later.",
+            "questions": [
+              "Which firstmate wakeups are unhandled?"
+            ],
+            "columns": [
+              "id",
+              "destination",
+              "handled",
+              "generation",
+              "kind",
+              "home_id",
+              "task_id",
+              "payload",
+              "created_at"
+            ]
+          },
+          {
+            "name": "chart_cache",
+            "description": "Last on-demand AXI chart and the watermark of rows it covers. Regenerated only when the watermark no longer holds.",
+            "questions": [
+              "What is the last generated firstmate chart?"
+            ],
+            "columns": [
+              "singleton",
+              "watermark",
+              "body",
+              "generated_at"
             ]
           }
         ]
