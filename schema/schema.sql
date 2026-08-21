@@ -163,11 +163,7 @@ CREATE TABLE task_artifact_versions (
   id INTEGER PRIMARY KEY,
   home_id TEXT NOT NULL REFERENCES homes(home_id),
   task_id TEXT NOT NULL,
-  relative_path TEXT NOT NULL CHECK (
-    relative_path GLOB (task_id || '/*')
-    AND relative_path NOT GLOB '*/../*'
-    AND relative_path NOT GLOB '*/..'
-  ),
+  relative_path TEXT NOT NULL,
   document_kind TEXT NOT NULL,
   version INTEGER NOT NULL CHECK (version >= 1),
   is_current INTEGER NOT NULL CHECK (is_current IN (0, 1)),
@@ -184,6 +180,22 @@ CREATE UNIQUE INDEX task_artifact_current
 
 CREATE INDEX task_artifact_task
   ON task_artifact_versions(home_id, task_id);
+
+CREATE TRIGGER task_artifact_path_insert
+BEFORE INSERT ON task_artifact_versions
+WHEN substr(NEW.relative_path, 1, length(NEW.task_id) + 1) != NEW.task_id || '/'
+  OR instr('/' || NEW.relative_path || '/', '/../') > 0
+BEGIN
+  SELECT RAISE(ABORT, 'task artifact path must start with its literal task id');
+END;
+
+CREATE TRIGGER task_artifact_path_update
+BEFORE UPDATE OF task_id, relative_path ON task_artifact_versions
+WHEN substr(NEW.relative_path, 1, length(NEW.task_id) + 1) != NEW.task_id || '/'
+  OR instr('/' || NEW.relative_path || '/', '/../') > 0
+BEGIN
+  SELECT RAISE(ABORT, 'task artifact path must start with its literal task id');
+END;
 
 -- Incremental cursor state shared with La Roca's public incrementality
 -- package. path is an opaque home-relative identity; absolute home paths are
