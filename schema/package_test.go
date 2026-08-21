@@ -232,7 +232,7 @@ func TestFabricatedHomeHasTheFiveFamiliesAndNoLivePaths(t *testing.T) {
 	}
 }
 
-func TestDresserSkillTeachesChartSQLAndFirstmateDoor(t *testing.T) {
+func TestDresserSkillTeachesNerveV1Contract(t *testing.T) {
 	root := repoRoot(t)
 	body, err := os.ReadFile(filepath.Join(root, "skills", "dresser", "SKILL.md"))
 	if err != nil {
@@ -240,13 +240,34 @@ func TestDresserSkillTeachesChartSQLAndFirstmateDoor(t *testing.T) {
 	}
 	text := string(body)
 	for _, want := range []string{
+		"## 1. Attach first",
+		"fingerprint-sweeps Markdown",
+		"prints the chart get-or-create plus the latest handoff",
+		"Attaching is subscribing",
+		"deterministic AXI",
 		"roca-firstmate chart",
 		"roca exec",
 		"plugin_roca_firstmate",
+		"### Native: milliseconds",
+		"Claude Monitor",
+		"Claude `asyncRewake`",
+		"client.session.promptAsync",
+		"never launch this recipe with `--pure`",
+		"TypeScript extension",
+		"`background-notify`",
+		"Hermes: hooks are probable",
+		"### Injection: seconds",
+		"Codex CLI and Cursor CLI",
+		"roca-firstmate follow --destination companion | fm-send",
+		"### Passive: on open",
+		"pending wakeup lines",
+		"native in milliseconds, injection in seconds, and passive on open",
+		"Tick keeps no in-memory state",
+		"resident daemon subcommand may be added later",
 		"conversation door",
 	} {
 		if !strings.Contains(text, want) {
-			t.Fatalf("dresser skill does not teach %q", want)
+			t.Fatalf("dresser skill does not teach Nerve v1 contract text %q", want)
 		}
 	}
 	for _, banned := range []string{"session-start", "Distiller", "rides.toml"} {
