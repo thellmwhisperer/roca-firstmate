@@ -15,6 +15,51 @@ CREATE INDEX ingest_file_state_project
 CREATE INDEX ingest_file_state_source_agent
   ON ingest_file_state(source_agent);
 
+ALTER TABLE operational_doc_versions RENAME TO operational_doc_versions_v1;
+
+CREATE TABLE operational_doc_versions (
+  id INTEGER PRIMARY KEY,
+  home_id TEXT NOT NULL REFERENCES homes(home_id),
+  relative_path TEXT NOT NULL CHECK (
+    relative_path NOT GLOB '*/*'
+    AND relative_path NOT GLOB '/*'
+    AND relative_path NOT IN (
+      'captain.md',
+      'captain-shared.md',
+      'learnings.md',
+      'projects.md',
+      'secondmates.md',
+      'captain-archive.md',
+      'memory-archive.md',
+      'note-archive.md',
+      'backlog.md',
+      'done-archive.md'
+    )
+  ),
+  document_kind TEXT NOT NULL,
+  version INTEGER NOT NULL CHECK (version >= 1),
+  is_current INTEGER NOT NULL CHECK (is_current IN (0, 1)),
+  content TEXT NOT NULL,
+  content_sha256 TEXT NOT NULL,
+  observed_at TEXT NOT NULL,
+  source_mtime TEXT,
+  UNIQUE (home_id, relative_path, version)
+);
+
+INSERT INTO operational_doc_versions (
+  id, home_id, relative_path, document_kind, version, is_current,
+  content, content_sha256, observed_at, source_mtime
+)
+SELECT
+  id, home_id, relative_path, document_kind, version, is_current,
+  content, content_sha256, observed_at, source_mtime
+FROM operational_doc_versions_v1;
+
+DROP TABLE operational_doc_versions_v1;
+
+CREATE UNIQUE INDEX operational_doc_current
+  ON operational_doc_versions(home_id, relative_path) WHERE is_current = 1;
+
 ALTER TABLE task_artifact_versions RENAME TO task_artifact_versions_v1;
 
 CREATE TABLE task_artifact_versions (

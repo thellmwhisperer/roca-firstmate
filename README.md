@@ -72,17 +72,19 @@ ORDER BY home_id, relative_path
 
 ## Install
 
-The verified installer payload remains data-only: exactly `plugin.json` and `firstmate.db`. Obtain the independently versioned Scribe executable with Go, ensure Go's bin directory is on `PATH`, then install the database package:
+The verified installer payload remains data-only: exactly `plugin.json` and `firstmate.db`. Obtain the independently versioned Scribe executable with Go, ensure Go's bin directory is on `PATH`, and have `jq` available to read the install result, then install the database package:
 
 ```sh
-go install github.com/thellmwhisperer/roca-firstmate/cmd/roca-firstmate@v0.2.0
-roca plugin install thellmwhisperer/roca-firstmate --json
+go install github.com/thellmwhisperer/roca-firstmate/cmd/roca-firstmate@main
+export ROCA_FIRSTMATE_DB="$(
+  roca plugin install thellmwhisperer/roca-firstmate --yes --json |
+  jq -r '.directory + "/firstmate.db"'
+)"
 ```
 
-The third-party plugin surface is experimental and default-off, so enable `features.plugins` in La Roca before the second command. The JSON install result reports the installed `firstmate.db` path. Use that value to start the long-lived watcher; this first Scribe launch, not plugin installation, performs the required initial backfill:
+The third-party plugin surface is experimental and default-off, so enable `features.plugins` in La Roca before the install command. `--yes` explicitly accepts the displayed DATA-ONLY risk in non-interactive JSON mode; `jq` reads the documented `directory` result and appends the package's `firstmate.db` filename. Start the long-lived watcher with that derived path; this first Scribe launch, not plugin installation, performs the required initial backfill:
 
 ```sh
-export ROCA_FIRSTMATE_DB='<installed firstmate.db path from the JSON result>'
 roca-firstmate watch --home '<firstmate home>' --home-id local-primary
 ```
 
