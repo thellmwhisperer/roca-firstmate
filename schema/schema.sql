@@ -122,10 +122,10 @@ CREATE TABLE task_state_versions (
 CREATE UNIQUE INDEX task_state_current
   ON task_state_versions(home_id, relative_path) WHERE is_current = 1;
 
--- 4. One-shot dated operational docs at the data/ root. Type is encoded
--- in the filename prefix (decision, order, brief, status, planning,
--- handover, postmortem, and later prefixes). Immutable once written;
--- a rewrite is still stored as a further version.
+-- 4. Root-level Markdown outside the named families. For dated operational
+-- docs, type is encoded in the filename prefix (decision, order, brief,
+-- status, planning, handover, postmortem, and later prefixes). A rewrite is
+-- still stored as a further version.
 CREATE TABLE operational_doc_versions (
   id INTEGER PRIMARY KEY,
   home_id TEXT NOT NULL REFERENCES homes(home_id),

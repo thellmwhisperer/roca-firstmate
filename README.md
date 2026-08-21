@@ -2,7 +2,7 @@
 
 La Roca plugin that mirrors a firstmate home into its own federated, queryable SQLite database.
 
-This repository is the public, worked full-size example of a La Roca plugin: a `plugin.json` manifest with a semantic fragment, a custodial `firstmate.db` whose schema is a versioned mirror, Scribe's incremental writer and continuous watcher, an on-demand AXI chart command, and the Dresser operating skill. The five-minute walk (three files, one install, one query) lives in La Roca's [docs/plugins.md](https://github.com/thellmwhisperer/la-roca/blob/main/docs/plugins.md). Start there. Grow from that shape rather than inventing a packaging of your own.
+This repository is the public, worked full-size example of a La Roca plugin: a `plugin.json` manifest with a semantic fragment, a custodial `firstmate.db` whose schema is a versioned mirror, Scribe's incremental writer and continuous watcher, an on-demand AXI chart command, and the Dresser operating skill. The five-minute walk (three files, one install, one query) lives in the pinned La Roca v1.64 [docs/plugins.md](https://github.com/thellmwhisperer/la-roca/blob/v1.64.0/docs/plugins.md). Start there. Grow from that shape rather than inventing a packaging of your own.
 
 La Roca the product is untouched. Firstmate is not modified. This plugin writes `firstmate.db` as an external federated database.
 
@@ -22,12 +22,12 @@ Tests use fabricated homes only (see `testdata/homes/northwind-harbor`). They do
 
 ## Five inventory families
 
-Scribe's closed source list, all under a home's `data/`:
+Scribe classifies every Markdown file under a home's `data/` into five inventory families:
 
 1. **Startup working set:** `captain.md`, `captain-shared.md`, `learnings.md`, `projects.md`, `secondmates.md`.
 2. **Archives:** `captain-archive.md`, `memory-archive.md`, `note-archive.md`.
 3. **Task state:** `backlog.md`, `done-archive.md` (cross-references only).
-4. **One-shot dated operational docs** at the `data/` root. Type is encoded in the filename prefix.
+4. **Root operational docs:** every other Markdown file at the `data/` root; dated filenames encode type in their prefix.
 5. **Per-task artifacts** under `data/<task-id>/` (`brief.md`, `acceptance.md`, and the rest), keyed to a mirrored task id.
 
 These families are classification, not selection: Scribe keeps all root Markdown as operational docs and all nested Markdown as task artifacts, including previously unseen names and deeper artifact paths.

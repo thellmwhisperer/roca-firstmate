@@ -14,7 +14,7 @@ Public normative La Roca plugin example. It ships `firstmate.db` as an external 
 - Backlog and per-task Markdown are mirrored for history and cross-references only. `tasks-axi` stays the query layer.
 - `state/` telemetry is out of v1. Leave `status_events`, `task_meta`, and `wake_queue` free for an additive later schema.
 - Tests use fabricated homes only (`testdata/homes/`). Never copy real homes, real paths, live ids, corpus counts, or live-install details into this repo.
-- Scribe imports La Roca's public parser, provenance, incrementality, and corpus-writer contracts. Nerve routing remains later.
+- Public La Roca package compatibility is enforced by `internal/scribe/public_packages_test.go`; Nerve routing remains later.
 - Teach the plugin pattern in `README.md`. Point at La Roca `docs/plugins.md` for the minimal quickstart.
 
 ## Commands
