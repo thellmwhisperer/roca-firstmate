@@ -56,6 +56,13 @@ func TestRunJSONAndUsageExitCodes(t *testing.T) {
 	if code := run([]string{"--help"}, &usage, os.Stderr); code != 0 {
 		t.Fatalf("help exit %d", code)
 	}
+	var chartHelp bytes.Buffer
+	if code := run([]string{"chart", "--help"}, os.Stdout, &chartHelp); code != 0 {
+		t.Fatalf("chart help exit %d", code)
+	}
+	if !strings.Contains(chartHelp.String(), "Usage:") {
+		t.Fatalf("chart help stderr %s", chartHelp.String())
+	}
 	if code := run([]string{"nope"}, &usage, os.Stderr); code != 2 {
 		t.Fatalf("unknown command exit %d, want 2", code)
 	}
