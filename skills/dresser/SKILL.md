@@ -2,7 +2,7 @@
 name: dresser
 description: >
   Operating skill for a roca-firstmate companion. Attach first: ingest the
-  mirror, register the workspace seat, print chart and handoff, and subscribe.
+  mirror, register workspace seats, print chart and handoff, and subscribe.
   Then route deterministic wakeup lines with the native, injection, or passive
   recipe supported by the current agent surface.
 ---
@@ -22,13 +22,13 @@ export FIRSTMATE_HOME_ID='local-primary'
 roca-firstmate attach
 ```
 
-This is the complete default gesture. It fingerprint-sweeps Markdown and ingests changes before answering, registers an opaque workspace seat without storing the workspace path, prints the chart get-or-create plus the latest handoff, includes the chart's database watermark, drains pending `companion` wakeups, and follows the database WAL. The seat label stays opaque unless the operator explicitly supplies `--label`. Attaching is subscribing. No init, resident daemon, or KeepAlive service is implied.
+This is the complete default gesture. It fingerprint-sweeps Markdown and ingests changes before answering, registers one opaque workspace seat per supplied home without storing the workspace path, prints the chart get-or-create plus the latest handoff, includes the chart's database watermark, drains pending `companion` wakeups, and follows the database WAL. Seat labels stay opaque unless the operator explicitly supplies `--label`. Attaching is subscribing. No init, resident daemon, or KeepAlive service is implied.
 
-Every other plugin verb also performs the fingerprint sweep before it answers. `roca-firstmate chart` is still available when only the current chart is needed. Use `--json` for its complete envelope.
+Every plugin verb supplied with paired `--home PATH --home-id ID` values performs the fingerprint sweep before it answers. `roca-firstmate chart` is still available when only the current chart is needed. Use `--json` for its complete envelope. [`README.md`](../../README.md) owns the complete multi-home and filter contract.
 
 ## 2. Wakeups follow: choose one latency recipe
 
-`roca-firstmate follow --destination companion` derives and registers an opaque seat for the current workspace, heartbeats its lease, and listens to `firstmate.db-wal`. Repeat `--home PATH --home-id ID` when one watcher covers more than one home; pass unpaired `--home-id` to follow one registered home. Each delivery attempt writes one JSON line, including `home_id`, before Nerve commits the handled generation. If the process dies or the commit fails after stdout accepts the line, that `(destination, generation)` can appear again: delivery across stdout and SQLite is at-least-once, never cross-system exactly-once. The adapter must deduplicate by destination plus generation before carrying the line into the harness wake mechanism.
+`roca-firstmate follow --destination companion` derives, registers, and heartbeats one opaque seat per selected home for the current workspace, then listens to `firstmate.db-wal`. Repeat `--home PATH --home-id ID` when one follow process refreshes more than one home; pass unpaired `--home-id` to follow one registered home. Each delivery attempt writes the README's home-tagged JSON line before Nerve commits the handled generation. If the process dies or the commit fails after stdout accepts the line, that `(destination, generation)` can appear again: delivery across stdout and SQLite is at-least-once, never cross-system exactly-once. The adapter must deduplicate by destination plus generation before carrying the line into the harness wake mechanism.
 
 `attach` and direct `follow` are mutually exclusive subscription owners during adapter handoff. Stop attach before starting a follow adapter for the same workspace and destination, and stop follow before returning ownership to attach, so two processes never race to consume that destination.
 
@@ -77,7 +77,7 @@ The chart is a bounded window. Pull history with gated SQL against alias `plugin
 
 ```sh
 roca exec 'SELECT home_id, relative_path, version, observed_at FROM plugin_roca_firstmate.working_set_versions WHERE is_current = 1 ORDER BY home_id, relative_path'
-roca exec 'SELECT id, destination, kind, generation, handled_generation, created_at FROM plugin_roca_firstmate.wakeups ORDER BY generation'
+roca exec 'SELECT id, home_id, destination, kind, generation, handled_generation, created_at FROM plugin_roca_firstmate.wakeups ORDER BY generation'
 ```
 
 Schema: `schema/schema.sql`. Do not guess tables. Do not `LIKE '%term%'`.
