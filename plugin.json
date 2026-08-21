@@ -17,7 +17,7 @@
     "databases": [
       {
         "database": "firstmate",
-        "description": "Total versioned mirror of a firstmate home's Markdown data tree: startup working set, archives, task state, one-shot operational docs, and per-task artifacts. Every rewrite is a new row; the current file is the latest version. Incremental cursor state, SQL-triggered Nerve wakeups, and the on-demand AXI chart cache share the same database.",
+        "description": "Total versioned mirror of a firstmate home's Markdown data tree: startup working set, archives, task state, root operational docs, and per-task artifacts. Every rewrite is a new row; the current file is the latest version. Incremental cursor state, SQL-triggered Nerve wakeups, and the on-demand AXI chart cache share the same database.",
         "questions": [
           "What did the firstmate home mirror record?",
           "Which firstmate working-set files, archives, task state, operational docs, or per-task artifacts were mirrored?",
@@ -109,9 +109,9 @@
           },
           {
             "name": "operational_doc_versions",
-            "description": "Versioned one-shot dated operational docs at the data root. document_kind is the filename prefix (decision, order, brief, status, planning, handover, postmortem, and later prefixes).",
+            "description": "Versioned mirror of every otherwise-unmatched Markdown file at the data root. document_kind is the component after a leading YYYY-MM-DD date, or otherwise the filename's first hyphen-delimited component.",
             "questions": [
-              "Which one-shot firstmate operational docs were mirrored?"
+              "Which firstmate root operational docs were mirrored?"
             ],
             "columns": [
               "id",

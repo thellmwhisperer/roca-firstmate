@@ -1,7 +1,6 @@
 // Package schema owns the firstmate.db DDL shipped by this plugin.
 //
-// Scribe imports La Roca's public parser, provenance, incrementality, and
-// corpus-writer contracts. This package stays the schema seat its mirror uses.
+// This package stays the schema seat used by Scribe's versioned mirror.
 package schema
 
 import (
