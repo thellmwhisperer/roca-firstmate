@@ -764,151 +764,181 @@
   "objects": [
     {
       "name": "archive_current",
+      "sql": "CREATE UNIQUE INDEX archive_current ON archive_versions(home_id, relative_path) WHERE is_current = 1",
       "tbl_name": "archive_versions",
       "type": "index"
     },
     {
       "name": "ingest_file_state_project",
+      "sql": "CREATE INDEX ingest_file_state_project ON ingest_file_state(project)",
       "tbl_name": "ingest_file_state",
       "type": "index"
     },
     {
       "name": "ingest_file_state_source_agent",
+      "sql": "CREATE INDEX ingest_file_state_source_agent ON ingest_file_state(source_agent)",
       "tbl_name": "ingest_file_state",
       "type": "index"
     },
     {
       "name": "operational_doc_current",
+      "sql": "CREATE UNIQUE INDEX operational_doc_current ON operational_doc_versions(home_id, relative_path) WHERE is_current = 1",
       "tbl_name": "operational_doc_versions",
       "type": "index"
     },
     {
       "name": "seats_destination_lease",
+      "sql": "CREATE INDEX seats_destination_lease ON seats(destination, lease_until)",
       "tbl_name": "seats",
       "type": "index"
     },
     {
       "name": "task_artifact_current",
+      "sql": "CREATE UNIQUE INDEX task_artifact_current ON task_artifact_versions(home_id, relative_path) WHERE is_current = 1",
       "tbl_name": "task_artifact_versions",
       "type": "index"
     },
     {
       "name": "task_artifact_task",
+      "sql": "CREATE INDEX task_artifact_task ON task_artifact_versions(home_id, task_id)",
       "tbl_name": "task_artifact_versions",
       "type": "index"
     },
     {
       "name": "task_state_current",
+      "sql": "CREATE UNIQUE INDEX task_state_current ON task_state_versions(home_id, relative_path) WHERE is_current = 1",
       "tbl_name": "task_state_versions",
       "type": "index"
     },
     {
       "name": "wakeups_generation",
+      "sql": "CREATE INDEX wakeups_generation ON wakeups(generation)",
       "tbl_name": "wakeups",
       "type": "index"
     },
     {
       "name": "wakeups_unhandled",
+      "sql": "CREATE INDEX wakeups_unhandled ON wakeups(handled, destination) WHERE handled = 0",
       "tbl_name": "wakeups",
       "type": "index"
     },
     {
       "name": "working_set_current",
+      "sql": "CREATE UNIQUE INDEX working_set_current ON working_set_versions(home_id, relative_path) WHERE is_current = 1",
       "tbl_name": "working_set_versions",
       "type": "index"
     },
     {
       "name": "archive_versions",
+      "sql": "CREATE TABLE archive_versions ( id INTEGER PRIMARY KEY, home_id TEXT NOT NULL REFERENCES homes(home_id), relative_path TEXT NOT NULL CHECK (relative_path IN ( 'captain-archive.md', 'memory-archive.md', 'note-archive.md' )), document_kind TEXT NOT NULL CHECK (document_kind IN ( 'captain-archive', 'memory-archive', 'note-archive' )), version INTEGER NOT NULL CHECK (version \u003e= 1), is_current INTEGER NOT NULL CHECK (is_current IN (0, 1)), content TEXT NOT NULL, content_sha256 TEXT NOT NULL, observed_at TEXT NOT NULL, source_mtime TEXT, UNIQUE (home_id, relative_path, version) )",
       "tbl_name": "archive_versions",
       "type": "table"
     },
     {
       "name": "chart_cache",
+      "sql": "CREATE TABLE chart_cache ( singleton INTEGER PRIMARY KEY CHECK (singleton = 1), watermark TEXT NOT NULL, body TEXT NOT NULL, generated_at TEXT NOT NULL )",
       "tbl_name": "chart_cache",
       "type": "table"
     },
     {
       "name": "homes",
+      "sql": "CREATE TABLE homes ( home_id TEXT PRIMARY KEY, label TEXT NOT NULL, kind TEXT NOT NULL CHECK (kind IN ('primary', 'secondmate')), recorded_at TEXT NOT NULL )",
       "tbl_name": "homes",
       "type": "table"
     },
     {
       "name": "ingest_file_state",
+      "sql": "CREATE TABLE ingest_file_state ( path TEXT NOT NULL PRIMARY KEY, source_kind TEXT NOT NULL, source_agent TEXT, project TEXT, fingerprint TEXT, last_synced_at TEXT, last_error TEXT, metadata TEXT NOT NULL DEFAULT '{}' )",
       "tbl_name": "ingest_file_state",
       "type": "table"
     },
     {
       "name": "operational_doc_versions",
+      "sql": "CREATE TABLE operational_doc_versions ( id INTEGER PRIMARY KEY, home_id TEXT NOT NULL REFERENCES homes(home_id), relative_path TEXT NOT NULL CHECK ( relative_path NOT GLOB '*/*' AND relative_path NOT GLOB '/*' AND relative_path NOT IN ( 'captain.md', 'captain-shared.md', 'learnings.md', 'projects.md', 'secondmates.md', 'captain-archive.md', 'memory-archive.md', 'note-archive.md', 'backlog.md', 'done-archive.md' ) ), document_kind TEXT NOT NULL, version INTEGER NOT NULL CHECK (version \u003e= 1), is_current INTEGER NOT NULL CHECK (is_current IN (0, 1)), content TEXT NOT NULL, content_sha256 TEXT NOT NULL, observed_at TEXT NOT NULL, source_mtime TEXT, UNIQUE (home_id, relative_path, version) )",
       "tbl_name": "operational_doc_versions",
       "type": "table"
     },
     {
       "name": "plugin_schema",
+      "sql": "CREATE TABLE plugin_schema ( singleton INTEGER PRIMARY KEY CHECK (singleton = 1), plugin_name TEXT NOT NULL, schema_version INTEGER NOT NULL, index_version INTEGER NOT NULL )",
       "tbl_name": "plugin_schema",
       "type": "table"
     },
     {
       "name": "seats",
+      "sql": "CREATE TABLE seats ( seat_id TEXT PRIMARY KEY, home_id TEXT NOT NULL REFERENCES homes(home_id), workspace_fingerprint TEXT NOT NULL, label TEXT NOT NULL, destination TEXT NOT NULL CHECK (destination IN ('captain', 'companion', 'machine')), attached_at TEXT NOT NULL, last_seen_at TEXT NOT NULL, lease_until TEXT NOT NULL, silence_generation INTEGER NOT NULL DEFAULT 0 CHECK (silence_generation \u003e= 0), UNIQUE (home_id, workspace_fingerprint) )",
       "tbl_name": "seats",
       "type": "table"
     },
     {
       "name": "task_artifact_versions",
+      "sql": "CREATE TABLE task_artifact_versions ( id INTEGER PRIMARY KEY, home_id TEXT NOT NULL REFERENCES homes(home_id), task_id TEXT NOT NULL, relative_path TEXT NOT NULL, document_kind TEXT NOT NULL, version INTEGER NOT NULL CHECK (version \u003e= 1), is_current INTEGER NOT NULL CHECK (is_current IN (0, 1)), content TEXT NOT NULL, content_sha256 TEXT NOT NULL, observed_at TEXT NOT NULL, source_mtime TEXT, UNIQUE (home_id, relative_path, version), FOREIGN KEY (home_id, task_id) REFERENCES tasks(home_id, task_id) )",
       "tbl_name": "task_artifact_versions",
       "type": "table"
     },
     {
       "name": "task_state_versions",
+      "sql": "CREATE TABLE task_state_versions ( id INTEGER PRIMARY KEY, home_id TEXT NOT NULL REFERENCES homes(home_id), relative_path TEXT NOT NULL CHECK (relative_path IN ( 'backlog.md', 'done-archive.md' )), document_kind TEXT NOT NULL CHECK (document_kind IN ( 'backlog', 'done-archive' )), version INTEGER NOT NULL CHECK (version \u003e= 1), is_current INTEGER NOT NULL CHECK (is_current IN (0, 1)), content TEXT NOT NULL, content_sha256 TEXT NOT NULL, observed_at TEXT NOT NULL, source_mtime TEXT, UNIQUE (home_id, relative_path, version) )",
       "tbl_name": "task_state_versions",
       "type": "table"
     },
     {
       "name": "tasks",
+      "sql": "CREATE TABLE tasks ( home_id TEXT NOT NULL REFERENCES homes(home_id), task_id TEXT NOT NULL CHECK ( task_id NOT IN ('', '.', '..') AND instr(task_id, '/') = 0 ), PRIMARY KEY (home_id, task_id) )",
       "tbl_name": "tasks",
       "type": "table"
     },
     {
       "name": "wakeups",
+      "sql": "CREATE TABLE wakeups ( id INTEGER PRIMARY KEY, destination TEXT NOT NULL CHECK (destination IN ('captain', 'companion', 'machine')), handled INTEGER NOT NULL DEFAULT 0 CHECK (handled IN (0, 1)), generation INTEGER NOT NULL, handled_generation INTEGER, kind TEXT NOT NULL DEFAULT '', home_id TEXT REFERENCES homes(home_id), task_id TEXT, payload TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL, CHECK ( (handled = 0 AND handled_generation IS NULL) OR (handled = 1 AND handled_generation IS NOT NULL AND handled_generation = generation) ) )",
       "tbl_name": "wakeups",
       "type": "table"
     },
     {
       "name": "working_set_versions",
+      "sql": "CREATE TABLE working_set_versions ( id INTEGER PRIMARY KEY, home_id TEXT NOT NULL REFERENCES homes(home_id), relative_path TEXT NOT NULL CHECK (relative_path IN ( 'captain.md', 'captain-shared.md', 'learnings.md', 'projects.md', 'secondmates.md' )), document_kind TEXT NOT NULL CHECK (document_kind IN ( 'captain', 'captain-shared', 'learnings', 'projects', 'secondmates' )), version INTEGER NOT NULL CHECK (version \u003e= 1), is_current INTEGER NOT NULL CHECK (is_current IN (0, 1)), content TEXT NOT NULL, content_sha256 TEXT NOT NULL, observed_at TEXT NOT NULL, source_mtime TEXT, UNIQUE (home_id, relative_path, version) )",
       "tbl_name": "working_set_versions",
       "type": "table"
     },
     {
       "name": "archive_version_wakeup",
+      "sql": "CREATE TRIGGER archive_version_wakeup AFTER INSERT ON archive_versions BEGIN INSERT INTO wakeups ( destination, generation, kind, home_id, payload, created_at ) VALUES ( 'companion', (SELECT COALESCE(MAX(generation), 0) + 1 FROM wakeups), 'document-mirrored', NEW.home_id, json_object( 'family', 'archive', 'row_id', NEW.id, 'relative_path', NEW.relative_path, 'version', NEW.version ), NEW.observed_at ); END",
       "tbl_name": "archive_versions",
       "type": "trigger"
     },
     {
       "name": "operational_doc_version_wakeup",
+      "sql": "CREATE TRIGGER operational_doc_version_wakeup AFTER INSERT ON operational_doc_versions BEGIN INSERT INTO wakeups ( destination, generation, kind, home_id, payload, created_at ) VALUES ( 'companion', (SELECT COALESCE(MAX(generation), 0) + 1 FROM wakeups), 'document-mirrored', NEW.home_id, json_object( 'family', 'operational_doc', 'row_id', NEW.id, 'relative_path', NEW.relative_path, 'version', NEW.version ), NEW.observed_at ); END",
       "tbl_name": "operational_doc_versions",
       "type": "trigger"
     },
     {
       "name": "task_artifact_path_insert",
+      "sql": "CREATE TRIGGER task_artifact_path_insert BEFORE INSERT ON task_artifact_versions WHEN substr(NEW.relative_path, 1, length(NEW.task_id) + 1) != NEW.task_id || '/' OR instr('/' || NEW.relative_path || '/', '/../') \u003e 0 BEGIN SELECT RAISE(ABORT, 'task artifact path must start with its literal task id'); END",
       "tbl_name": "task_artifact_versions",
       "type": "trigger"
     },
     {
       "name": "task_artifact_path_update",
+      "sql": "CREATE TRIGGER task_artifact_path_update BEFORE UPDATE OF task_id, relative_path ON task_artifact_versions WHEN substr(NEW.relative_path, 1, length(NEW.task_id) + 1) != NEW.task_id || '/' OR instr('/' || NEW.relative_path || '/', '/../') \u003e 0 BEGIN SELECT RAISE(ABORT, 'task artifact path must start with its literal task id'); END",
       "tbl_name": "task_artifact_versions",
       "type": "trigger"
     },
     {
       "name": "task_artifact_version_wakeup",
+      "sql": "CREATE TRIGGER task_artifact_version_wakeup AFTER INSERT ON task_artifact_versions BEGIN INSERT INTO wakeups ( destination, generation, kind, home_id, task_id, payload, created_at ) VALUES ( 'companion', (SELECT COALESCE(MAX(generation), 0) + 1 FROM wakeups), 'document-mirrored', NEW.home_id, NEW.task_id, json_object( 'family', 'task_artifact', 'row_id', NEW.id, 'relative_path', NEW.relative_path, 'version', NEW.version ), NEW.observed_at ); END",
       "tbl_name": "task_artifact_versions",
       "type": "trigger"
     },
     {
       "name": "task_state_version_wakeup",
+      "sql": "CREATE TRIGGER task_state_version_wakeup AFTER INSERT ON task_state_versions BEGIN INSERT INTO wakeups ( destination, generation, kind, home_id, payload, created_at ) VALUES ( 'companion', (SELECT COALESCE(MAX(generation), 0) + 1 FROM wakeups), 'document-mirrored', NEW.home_id, json_object( 'family', 'task_state', 'row_id', NEW.id, 'relative_path', NEW.relative_path, 'version', NEW.version ), NEW.observed_at ); END",
       "tbl_name": "task_state_versions",
       "type": "trigger"
     },
     {
       "name": "working_set_version_wakeup",
+      "sql": "CREATE TRIGGER working_set_version_wakeup AFTER INSERT ON working_set_versions BEGIN INSERT INTO wakeups ( destination, generation, kind, home_id, payload, created_at ) VALUES ( 'companion', (SELECT COALESCE(MAX(generation), 0) + 1 FROM wakeups), 'document-mirrored', NEW.home_id, json_object( 'family', 'working_set', 'row_id', NEW.id, 'relative_path', NEW.relative_path, 'version', NEW.version ), NEW.observed_at ); END",
       "tbl_name": "working_set_versions",
       "type": "trigger"
     }
