@@ -2,13 +2,13 @@
 
 La Roca plugin that mirrors one or more firstmate homes into its own federated SQLite database and routes deterministic wakeups to attached agent seats.
 
-This is the public normative full-size plugin example: `plugin.json`, a custodial `firstmate.db` created by the first database-backed verb from the embedded schema, Scribe's versioned Markdown mirror, an on-demand AXI chart, Nerve v1, and the Dresser operating skill. La Roca's minimal plugin quickstart lives in the pinned v1.68 [docs/plugins.md](https://github.com/thellmwhisperer/la-roca/blob/v1.68.0/docs/plugins.md).
+This is the public normative full-size plugin example: `plugin.json`, a custodial federated SQLite database, Scribe's versioned Markdown mirror, an on-demand AXI chart, Nerve v1, and the Dresser operating skill. La Roca's minimal plugin quickstart lives in the pinned v1.68 [docs/plugins.md](https://github.com/thellmwhisperer/la-roca/blob/v1.68.0/docs/plugins.md).
 
 La Roca the product stays untouched. Firstmate is mirrored, not modified. Tests use only the fabricated homes under `testdata/homes/`; public code and text contain no live home data or install details.
 
 ## Frozen contract
 
-- `firstmate.db` is an external federated database created by the first database-backed verb from `schema/schema.sql`. The installer payload is exactly `plugin.json`. The database file is never committed.
+- `firstmate.db` is an external federated database. Its payload and first-run contract are defined in [Install and verify](#install-and-verify).
 - Firstmate remains the writer of its Markdown. Scribe mirrors it; `tasks-axi` remains the backlog query layer.
 - Every rewrite becomes a new version row, with `is_current = 1` on the latest file.
 - Distiller is deleted. The chart is an on-demand get-or-create with a database watermark.
@@ -51,7 +51,7 @@ roca-firstmate place --dir '<plugin directory>'
 
 Watch telemetry is JSONL next to `firstmate.db` (`logs/watch-YYYY-MM-DD.jsonl`), never a database table. Lines record raise, lease-acquired, lease-lost, sweep counts, and crash-retry. A crash inside the child is logged and retried with backoff; it does not require a daemon.
 
-`place` only copies this independently versioned executable into the plugin directory (default: the directory of `ROCA_FIRSTMATE_DB`) as `roca-firstmate`, so a session parent resolves it from that directory instead of PATH luck. The installer payload stays `plugin.json`. The first database-backed verb (`attach`, `chart`, `follow`, `tick`, `scribe`, or `watch`) creates `firstmate.db` from the embedded schema when the file is missing. This plugin does not add unknown manifest fields: current La Roca rejects them. The watch child is ready for a generic session-companion declaration any plugin could name; that kernel seam, if added, must not mention firstmate.
+`place` only copies this independently versioned executable into the plugin directory (default: the directory of `ROCA_FIRSTMATE_DB`) as `roca-firstmate`, so a session parent resolves it from that directory instead of PATH luck. [Install and verify](#install-and-verify) owns the payload and first-run database contract. This plugin does not add unknown manifest fields: current La Roca rejects them. The watch child is ready for a generic session-companion declaration any plugin could name; that kernel seam, if added, must not mention firstmate.
 
 ## Attach: the default gesture
 
@@ -137,7 +137,7 @@ export ROCA_FIRSTMATE_DB="$(
 roca-firstmate place
 ```
 
-The experimental plugin surface must be enabled in La Roca. `--yes` accepts the displayed DATA-ONLY risk for non-interactive JSON installation. The first database-backed verb (`attach`, `chart`, `follow`, `tick`, `scribe`, or `watch`) creates the empty `firstmate.db` at that path from the embedded schema; a second run is idempotent. `place` only copies the executable. Because the manifest declares `custody: true`, uninstall archives the database instead of deleting operator-owned mirror history.
+The experimental plugin surface must be enabled in La Roca. `--yes` accepts the displayed DATA-ONLY risk for non-interactive JSON installation. The installer verifies exactly `plugin.json`; no database file is committed or shipped. The first database-backed verb (`attach`, `chart`, `follow`, `tick`, `scribe`, or `watch`) creates the empty `firstmate.db` at that path from the embedded `schema/schema.sql` with the current `plugin_schema` marker; a second run is idempotent. Because the manifest declares `custody: true`, uninstall archives the database instead of deleting operator-owned mirror history.
 
 Do not install this repository onto a live captain La Roca while developing or testing it. Prove the exact payload locally:
 
