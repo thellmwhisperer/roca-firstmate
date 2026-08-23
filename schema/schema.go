@@ -29,17 +29,40 @@ func Apply(db *sql.DB) error {
 }
 
 func applyContext(ctx context.Context, db *sql.DB) error {
-	tx, err := db.BeginTx(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("begin schema bootstrap: %w", err)
-	}
-	defer tx.Rollback()
-	if _, err := tx.ExecContext(ctx, SQL); err != nil {
+	return withImmediateTransaction(ctx, db, func(conn *sql.Conn) error {
+		return applySchema(ctx, conn)
+	})
+}
+
+func applySchema(ctx context.Context, conn *sql.Conn) error {
+	if _, err := conn.ExecContext(ctx, SQL); err != nil {
 		return fmt.Errorf("apply schema: %w", err)
 	}
-	if err := tx.Commit(); err != nil {
+	return nil
+}
+
+func withImmediateTransaction(ctx context.Context, db *sql.DB, operation func(*sql.Conn) error) error {
+	conn, err := db.Conn(ctx)
+	if err != nil {
+		return fmt.Errorf("acquire schema connection: %w", err)
+	}
+	defer conn.Close()
+	if _, err := conn.ExecContext(ctx, `BEGIN IMMEDIATE`); err != nil {
+		return fmt.Errorf("begin schema bootstrap: %w", err)
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_, _ = conn.ExecContext(context.WithoutCancel(ctx), `ROLLBACK`)
+		}
+	}()
+	if err := operation(conn); err != nil {
+		return err
+	}
+	if _, err := conn.ExecContext(ctx, `COMMIT`); err != nil {
 		return fmt.Errorf("commit schema bootstrap: %w", err)
 	}
+	committed = true
 	return nil
 }
 
@@ -50,14 +73,19 @@ func Ensure(db *sql.DB) error {
 
 // EnsureContext applies the current schema to an empty database, then migrates.
 func EnsureContext(ctx context.Context, db *sql.DB) error {
-	var name string
-	err := db.QueryRowContext(ctx, `SELECT plugin_name FROM plugin_schema WHERE singleton = 1`).Scan(&name)
-	if missingPluginSchema(err) {
-		if err := applyContext(ctx, db); err != nil {
-			return err
+	err := withImmediateTransaction(ctx, db, func(conn *sql.Conn) error {
+		var name string
+		err := conn.QueryRowContext(ctx, `SELECT plugin_name FROM plugin_schema WHERE singleton = 1`).Scan(&name)
+		if missingPluginSchema(err) {
+			return applySchema(ctx, conn)
 		}
-	} else if err != nil {
-		return fmt.Errorf("read plugin schema: %w", err)
+		if err != nil {
+			return fmt.Errorf("read plugin schema: %w", err)
+		}
+		return nil
+	})
+	if err != nil {
+		return err
 	}
 	return MigrateContext(ctx, db)
 }

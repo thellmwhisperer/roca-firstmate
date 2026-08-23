@@ -7,8 +7,9 @@ import (
 	"path/filepath"
 	"reflect"
 	"runtime"
-	"strings"
 	"testing"
+
+	"github.com/thellmwhisperer/roca-firstmate/internal/testcatalog"
 )
 
 type templateCatalog struct {
@@ -106,7 +107,7 @@ func dumpTemplateCatalog(t *testing.T, db *sql.DB) templateCatalog {
 		if err := rows.Scan(&object.Type, &object.Name, &object.TblName, &object.SQL); err != nil {
 			t.Fatalf("scan schema object: %v", err)
 		}
-		object.SQL = normalizeSchemaSQL(object.SQL)
+		object.SQL = testcatalog.NormalizeSQL(object.SQL)
 		catalog.Objects = append(catalog.Objects, object)
 	}
 	if err := rows.Err(); err != nil {
@@ -146,10 +147,6 @@ func dumpTemplateCatalog(t *testing.T, db *sql.DB) templateCatalog {
 		t.Fatalf("plugin_schema row: %v", err)
 	}
 	return catalog
-}
-
-func normalizeSchemaSQL(statement string) string {
-	return strings.Join(strings.Fields(statement), " ")
 }
 
 func catalogDiff(want, got templateCatalog) string {
