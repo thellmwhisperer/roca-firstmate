@@ -79,17 +79,17 @@ func TestTryAcquireSeatDoesNotStealLaterFractionalExpiry(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	now := time.Date(2026, 3, 14, 10, 0, 2, 100_000_000, time.UTC)
+	now := time.Date(2026, 3, 14, 10, 0, 2, 100, time.UTC)
 	held, _, err := nerve.TryAcquireSeat(context.Background(), db, nerve.SeatConfig{
 		HomeID: "northwind-harbor", HolderToken: firstToken,
-		Destination: "machine", Now: now, Lease: 20 * time.Millisecond,
+		Destination: "machine", Now: now, Lease: 100 * time.Nanosecond,
 	})
 	if err != nil || !held {
 		t.Fatalf("first acquire held=%v err=%v", held, err)
 	}
 	stolen, _, err := nerve.TryAcquireSeat(context.Background(), db, nerve.SeatConfig{
 		HomeID: "northwind-harbor", HolderToken: secondToken,
-		Destination: "machine", Now: now, Lease: time.Second,
+		Destination: "machine", Now: now.Add(50 * time.Nanosecond), Lease: time.Second,
 	})
 	if err != nil {
 		t.Fatal(err)

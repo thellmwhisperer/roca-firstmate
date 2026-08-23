@@ -85,7 +85,7 @@ func TryAcquireSeat(ctx context.Context, db *sql.DB, config SeatConfig) (bool, S
 		last_seen_at = excluded.last_seen_at,
 		lease_until = excluded.lease_until,
 		silence_generation = 0
-	WHERE julianday(seats.lease_until) <= julianday(excluded.last_seen_at)
+	WHERE seats.lease_until <= excluded.last_seen_at
 	   OR seats.workspace_fingerprint = excluded.workspace_fingerprint`,
 		seatID, homeID, token, label, config.Destination, stamp, stamp, until)
 	if err != nil {
@@ -113,6 +113,31 @@ func TryAcquireSeat(ctx context.Context, db *sql.DB, config SeatConfig) (bool, S
 		Status: "holding", SeatID: seatID, HomeID: homeID, Label: label,
 		Destination: config.Destination, AttachedAt: attachedAt, LeaseUntil: leaseUntil,
 	}, nil
+}
+
+// FenceSeat verifies that a watch holder still owns an unexpired lease inside
+// the caller's transaction.
+func FenceSeat(ctx context.Context, tx *sql.Tx, seatID, holderToken string, now time.Time) error {
+	seatID = strings.TrimSpace(seatID)
+	holderToken = strings.TrimSpace(holderToken)
+	if tx == nil || seatID == "" || holderToken == "" {
+		return fmt.Errorf("fence watch lease requires a transaction, seat, and holder token")
+	}
+	now = now.UTC()
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	var held bool
+	if err := tx.QueryRowContext(ctx, `SELECT EXISTS (
+		SELECT 1 FROM seats
+		WHERE seat_id = ? AND workspace_fingerprint = ? AND lease_until > ?
+	)`, seatID, holderToken, now.Format(leaseTimeLayout)).Scan(&held); err != nil {
+		return fmt.Errorf("fence watch lease: %w", err)
+	}
+	if !held {
+		return fmt.Errorf("watch lease is no longer held")
+	}
+	return nil
 }
 
 // RenewSeat extends a watch lease only when this holder still owns it.
