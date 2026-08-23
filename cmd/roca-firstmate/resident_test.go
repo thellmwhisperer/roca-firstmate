@@ -98,6 +98,87 @@ func TestWatchResidentSingleFlightAndTakeover(t *testing.T) {
 	waitExit(t, standin.done, 3*time.Second)
 }
 
+func TestWatchTakeoverRefreshesCachedFingerprintState(t *testing.T) {
+	path := appliedDBPath(t)
+	db, err := openDatabase(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	homePath := fabricatedHome(t, "northwind-harbor")
+	captain := filepath.Join(homePath, "data", "captain.md")
+	original, err := os.ReadFile(captain)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pair := homePair{Path: homePath, ID: "northwind-harbor"}
+	holderIngester, err := newIngester(context.Background(), db, pair, "firstmate")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := holderIngester.Backfill(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	holderToken, err := nerve.NewHolderToken()
+	if err != nil {
+		t.Fatal(err)
+	}
+	seatID := nerve.WatchSeatID(pair.ID)
+	held, _, err := nerve.TryAcquireSeat(context.Background(), db, nerve.SeatConfig{
+		SeatID: seatID, HomeID: pair.ID, HolderToken: holderToken,
+		Destination: "machine", Now: time.Now().UTC(), Lease: time.Minute,
+	})
+	if err != nil || !held {
+		t.Fatalf("holder lease held=%v err=%v", held, err)
+	}
+	standbyToken, err := nerve.NewHolderToken()
+	if err != nil {
+		t.Fatal(err)
+	}
+	standby := &leasedHome{
+		pair: pair, token: standbyToken, seatID: seatID, sourceAgent: "firstmate",
+	}
+	msgs := make(chan watchMsg, 16)
+	var watches []homeWatch
+	var summaries []scribe.Summary
+	if err := acquireWatchHomes(
+		context.Background(), db, []*leasedHome{standby}, 20*time.Millisecond,
+		time.Minute, 20*time.Millisecond, nil, msgs, &watches, &summaries,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if len(watches) != 0 || !standby.prepared {
+		t.Fatalf("standby preparation watches=%d prepared=%v", len(watches), standby.prepared)
+	}
+	if err := os.WriteFile(captain, []byte("# intervening holder content\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := holderIngester.IngestPath(context.Background(), captain); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(captain, original, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := nerve.ReleaseSeat(context.Background(), db, seatID, holderToken, time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	defer standDownWatchHome(context.Background(), db, standby, 0, nil, time.Time{})
+	watches = nil
+	summaries = nil
+	if err := acquireWatchHomes(
+		context.Background(), db, []*leasedHome{standby}, 20*time.Millisecond,
+		time.Minute, 20*time.Millisecond, nil, msgs, &watches, &summaries,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if len(watches) != 1 || len(summaries) != 1 || summaries[0].Inserted != 1 {
+		t.Fatalf("takeover watches=%d summaries=%+v", len(watches), summaries)
+	}
+	if got := currentVersions(t, path, pair.ID, "captain.md"); got != 3 {
+		t.Fatalf("takeover versions=%d, want 3", got)
+	}
+}
+
 func TestWatchResidentRetriesFailedIngestWithCatchUp(t *testing.T) {
 	clearHomeEnv(t)
 	t.Setenv("ROCA_FIRSTMATE_WATCH_LEASE", "2s")
@@ -482,8 +563,14 @@ func TestHeartbeatRenewsOtherHomeDuringBlockedSweepAndFencesLoss(t *testing.T) {
 		root: t.TempDir(), homeID: "skiff-secondmate", started: make(chan struct{}, 1), unblock: secondUnblock,
 	}
 	homes := []*leasedHome{
-		{pair: homePair{ID: "northwind-harbor"}, token: firstToken, seatID: nerve.WatchSeatID("northwind-harbor"), ingester: firstIngester},
-		{pair: homePair{ID: "skiff-secondmate"}, token: secondToken, seatID: nerve.WatchSeatID("skiff-secondmate"), ingester: secondIngester},
+		{
+			pair: homePair{ID: "northwind-harbor"}, token: firstToken, seatID: nerve.WatchSeatID("northwind-harbor"),
+			newIngester: func(context.Context, *sql.DB, *leasedHome) (watchIngester, error) { return firstIngester, nil },
+		},
+		{
+			pair: homePair{ID: "skiff-secondmate"}, token: secondToken, seatID: nerve.WatchSeatID("skiff-secondmate"),
+			newIngester: func(context.Context, *sql.DB, *leasedHome) (watchIngester, error) { return secondIngester, nil },
+		},
 	}
 	lease := 120 * time.Millisecond
 	retry := 20 * time.Millisecond

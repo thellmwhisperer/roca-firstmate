@@ -31,7 +31,9 @@ type leasedHome struct {
 	seatID      string
 	sourceAgent string
 	ingester    watchIngester
+	newIngester func(context.Context, *sql.DB, *leasedHome) (watchIngester, error)
 	source      filewatch.Source
+	prepared    bool
 	holding     bool
 	generation  uint64
 	leaseUntil  time.Time
@@ -88,6 +90,9 @@ func runWatch(
 		}
 		home := &leasedHome{
 			pair: pair, token: token, seatID: nerve.WatchSeatID(pair.ID), sourceAgent: values.sourceAgent,
+			newIngester: func(ctx context.Context, db *sql.DB, home *leasedHome) (watchIngester, error) {
+				return newWatchIngester(ctx, db, home)
+			},
 		}
 		homes = append(homes, home)
 	}
@@ -220,20 +225,25 @@ func acquireWatchHomes(
 			home.mu.Unlock()
 			continue
 		}
-		ingester := home.ingester
+		prepared := home.prepared
+		factory := home.newIngester
 		home.mu.Unlock()
-		if ingester == nil {
-			created, err := newWatchIngester(ctx, db, home)
+		if factory == nil {
+			factory = func(ctx context.Context, db *sql.DB, home *leasedHome) (watchIngester, error) {
+				return newWatchIngester(ctx, db, home)
+			}
+		}
+		if !prepared {
+			_, err := factory(ctx, db, home)
 			if err != nil {
 				home.mu.Lock()
-				home.retryAt = now.Add(retry)
+				home.retryAt = time.Now().UTC().Add(retry)
 				home.mu.Unlock()
 				failures = append(failures, err)
 				continue
 			}
 			home.mu.Lock()
-			home.ingester = created
-			ingester = created
+			home.prepared = true
 			home.mu.Unlock()
 		}
 		acquireNow := time.Now().UTC()
@@ -261,6 +271,21 @@ func acquireWatchHomes(
 		home.leaseCancel = leaseCancel
 		home.mu.Unlock()
 		log.Append(watchlog.Event{Kind: watchlog.KindLeaseAcquired, HomeID: home.pair.ID, SeatID: seat.SeatID})
+		ingester, err := factory(leaseCtx, db, home)
+		if err != nil {
+			standDownWatchHome(ctx, db, home, generation, log, time.Now().UTC().Add(retry))
+			failures = append(failures, err)
+			continue
+		}
+		home.mu.Lock()
+		active := home.holding && home.generation == generation
+		if active {
+			home.ingester = ingester
+		}
+		home.mu.Unlock()
+		if !active {
+			continue
+		}
 		source, err := filewatch.New(ingester.DataRoot(), poll)
 		if err != nil {
 			standDownWatchHome(ctx, db, home, generation, log, acquireNow.Add(retry))
@@ -268,7 +293,7 @@ func acquireWatchHomes(
 			continue
 		}
 		home.mu.Lock()
-		active := home.holding && home.generation == generation
+		active = home.holding && home.generation == generation
 		if active {
 			home.source = source
 		}
