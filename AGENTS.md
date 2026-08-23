@@ -1,12 +1,12 @@
 # roca-firstmate
 
-Public normative La Roca plugin example. Its first database-backed verb creates `firstmate.db` from `schema/schema.sql`. The La Roca product repo stays untouched. Firstmate is mirrored, not modified.
+Public normative La Roca plugin example. The La Roca product repo stays untouched. Firstmate is mirrored, not modified.
 
 ## Contract
 
-- Payload the installer verifies is exactly `plugin.json`. The first database-backed invocation creates `firstmate.db` from `schema/schema.sql` with the current `plugin_schema` marker; `place` only copies the executable. Never commit a `.db` file.
+- Never commit a `.db` file.
 - Five markdown families are versioned: every rewrite is a new row, `is_current` marks the latest file. Schema: `schema/schema.sql`.
-- `wakeups`, Scribe's insert triggers, and Nerve v1 ship now. Destinations are `captain`, `companion`, and `machine`; mobile is later. `attach` is the default foreground subscription, `follow` listens to the WAL, and ephemeral `tick` owns silence/orphan recovery. No default daemon or KeepAlive. `README.md` owns the session-owned `watch` and `place` contract. `chart_cache` holds the on-demand AXI chart and its watermark. Distiller is deleted.
+- `wakeups`, Scribe's insert triggers, and Nerve v1 ship now. Destinations are `captain`, `companion`, and `machine`; mobile is later. `attach` is the default foreground subscription, `follow` listens to the WAL, and ephemeral `tick` owns silence/orphan recovery. No default daemon or KeepAlive. `README.md` owns the installer payload, first-run database creation, session-owned `watch`, and `place` contract. `chart_cache` holds the on-demand AXI chart and its watermark. Distiller is deleted.
 - Do not install this plugin onto a live captain La Roca. Prove the payload with `make check`.
 - `roca-firstmate chart` is get-or-create: generate, serve cached, or regenerate. Bounded TOON, `help[]`, `--json`. With supplied home pairs, verbs perform Scribe's fingerprint sweep before answering. `README.md` owns the CLI's multi-home and filter contract.
 - Dresser (`skills/dresser/SKILL.md`) is a skill, not a hook: attach first, choose the harness latency recipe, SQL for history, firstmate only through its conversation door.
