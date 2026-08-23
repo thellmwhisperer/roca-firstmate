@@ -1,0 +1,110 @@
+name: Release
+
+# Release archives are produced by this workflow; local builds are never
+# published as official releases.
+#
+# `workflow_dispatch` rebuilds an existing tag without creating a new version.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "The tag to build and publish (vX.Y.Z)"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          ref: ${{ inputs.tag || github.ref_name }}
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Format, vet and tests
+        run: make check
+
+      - name: The tag matches plugin.json
+        env:
+          TAG: ${{ inputs.tag || github.ref_name }}
+        run: |
+          version=$(awk -F '"' '/"version"/{print $4; exit}' plugin.json)
+          test "$TAG" = "v$version" || {
+            echo "tag is $TAG and plugin.json version is $version" >&2
+            exit 1
+          }
+
+      - name: darwin-arm64 and linux-amd64 archives
+        env:
+          VERSION: ${{ inputs.tag || github.ref_name }}
+        run: |
+          version=${VERSION#v}
+          make dist VERSION="$version"
+
+      - name: Packaged checksums match the archives
+        env:
+          TAG: ${{ inputs.tag || github.ref_name }}
+        run: |
+          python3 - <<'PY'
+          import hashlib, tarfile, os, sys
+          tag = os.environ["TAG"]
+          dist = ".tmp/dist"
+          for target in ("darwin-arm64", "linux-amd64"):
+              archive = os.path.join(dist, f"roca-firstmate-{tag}-{target}.tar.gz")
+              stable = os.path.join(dist, f"roca-firstmate-{target}.tar.gz")
+              if not os.path.isfile(archive) or not os.path.isfile(stable):
+                  sys.exit(f"missing {archive} or {stable}")
+              names = []
+              checksums = {}
+              with tarfile.open(archive, "r:gz") as tar:
+                  for member in tar.getmembers():
+                      if not member.isfile():
+                          sys.exit(f"{archive} contains a non-file {member.name}")
+                      name = member.name.lstrip("./")
+                      if "/" in name:
+                          sys.exit(f"{archive} contains nested path {member.name}")
+                      names.append(name)
+                      data = tar.extractfile(member).read()
+                      if name == "checksums.txt":
+                          for line in data.decode().splitlines():
+                              line = line.strip()
+                              if not line:
+                                  continue
+                              digest, filename = line.split()
+                              checksums[filename] = digest
+                      else:
+                          digest = hashlib.sha256(data).hexdigest()
+                          checksums.setdefault("_files", {})[name] = digest
+              files = sorted(n for n in names if n != "checksums.txt")
+              want = ["firstmate.db", "plugin.json", "roca-firstmate"]
+              if files != want:
+                  sys.exit(f"{archive} files {files}, want {want}")
+              declared = sorted(k for k in checksums if k != "_files")
+              if declared != want:
+                  sys.exit(f"{archive} checksums declare {declared}, want {want}")
+              for name in want:
+                  if checksums[name] != checksums["_files"][name]:
+                      sys.exit(f"{archive} checksum mismatch for {name}")
+              print(archive, "ok")
+          PY
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag || github.ref_name }}
+        run: |
+          gh release view "$TAG" >/dev/null 2>&1 || \
+            gh release create "$TAG" --verify-tag \
+              --title "roca-firstmate $TAG" --generate-notes
+          gh release upload "$TAG" --clobber .tmp/dist/roca-firstmate-*.tar.gz
