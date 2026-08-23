@@ -12,6 +12,8 @@ import (
 
 const watchSeatPrefix = "watch-"
 
+const leaseTimeLayout = "2006-01-02T15:04:05.000000000Z07:00"
+
 // WatchSeatID is the single-flight seat identity for one home's filesystem
 // watcher. Concurrent MCP sessions compete for this row; they do not invent a
 // second lock.
@@ -63,8 +65,8 @@ func TryAcquireSeat(ctx context.Context, db *sql.DB, config SeatConfig) (bool, S
 	if label == "" {
 		label = "watch"
 	}
-	stamp := now.Format(time.RFC3339Nano)
-	until := now.Add(lease).Format(time.RFC3339Nano)
+	stamp := now.Format(leaseTimeLayout)
+	until := now.Add(lease).Format(leaseTimeLayout)
 
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
@@ -83,7 +85,7 @@ func TryAcquireSeat(ctx context.Context, db *sql.DB, config SeatConfig) (bool, S
 		last_seen_at = excluded.last_seen_at,
 		lease_until = excluded.lease_until,
 		silence_generation = 0
-	WHERE seats.lease_until <= excluded.last_seen_at
+	WHERE julianday(seats.lease_until) <= julianday(excluded.last_seen_at)
 	   OR seats.workspace_fingerprint = excluded.workspace_fingerprint`,
 		seatID, homeID, token, label, config.Destination, stamp, stamp, until)
 	if err != nil {
@@ -130,7 +132,7 @@ func RenewSeat(ctx context.Context, db *sql.DB, seatID, holderToken string, now 
 	result, err := db.ExecContext(ctx, `UPDATE seats SET
 		last_seen_at = ?, lease_until = ?, silence_generation = 0
 		WHERE seat_id = ? AND workspace_fingerprint = ?`,
-		now.Format(time.RFC3339Nano), now.Add(lease).Format(time.RFC3339Nano),
+		now.Format(leaseTimeLayout), now.Add(lease).Format(leaseTimeLayout),
 		seatID, holderToken)
 	if err != nil {
 		return false, fmt.Errorf("renew watch lease: %w", err)
@@ -154,7 +156,7 @@ func ReleaseSeat(ctx context.Context, db *sql.DB, seatID, holderToken string, no
 	if now.IsZero() {
 		now = time.Now().UTC()
 	}
-	stamp := now.Format(time.RFC3339Nano)
+	stamp := now.Format(leaseTimeLayout)
 	_, err := db.ExecContext(ctx, `UPDATE seats SET last_seen_at = ?, lease_until = ?
 		WHERE seat_id = ? AND workspace_fingerprint = ?`,
 		stamp, stamp, seatID, holderToken)

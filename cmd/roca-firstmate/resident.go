@@ -29,6 +29,7 @@ type leasedHome struct {
 	pair        homePair
 	token       string
 	seatID      string
+	sourceAgent string
 	ingester    watchIngester
 	source      filewatch.Source
 	holding     bool
@@ -52,21 +53,24 @@ func runWatch(ctx context.Context, db *sql.DB, pairs []homePair, values scribeFl
 	log := watchlog.Open(watchlog.Dir(values.dbPath), time.Now)
 	homes := make([]*leasedHome, 0, len(pairs))
 	for _, pair := range pairs {
+		if err := scribe.ValidateConfig(scribe.Config{
+			Home: pair.Path, HomeID: pair.ID, Label: pair.Label, Kind: pair.Kind, SourceAgent: values.sourceAgent,
+		}); err != nil {
+			printScribeError(stdout, err)
+			return exitError
+		}
 		token, err := nerve.NewHolderToken()
 		if err != nil {
 			printScribeError(stdout, err)
 			return exitError
 		}
-		ingester, err := newIngester(ctx, db, pair, values.sourceAgent)
-		if err != nil {
-			printScribeError(stdout, err)
-			return exitError
-		}
 		home := &leasedHome{
-			pair: pair, token: token, seatID: nerve.WatchSeatID(pair.ID), ingester: ingester,
+			pair: pair, token: token, seatID: nerve.WatchSeatID(pair.ID), sourceAgent: values.sourceAgent,
 		}
-		_ = log.Append(watchlog.Event{Kind: watchlog.KindRaise, HomeID: pair.ID, SeatID: home.seatID})
 		homes = append(homes, home)
+	}
+	for _, home := range homes {
+		_ = log.Append(watchlog.Event{Kind: watchlog.KindRaise, HomeID: home.pair.ID, SeatID: home.seatID})
 	}
 	defer func() {
 		for _, home := range homes {
@@ -155,6 +159,23 @@ func acquireWatchHomes(
 			home.mu.Unlock()
 			continue
 		}
+		ingester := home.ingester
+		home.mu.Unlock()
+		if ingester == nil {
+			created, err := newIngester(ctx, db, home.pair, home.sourceAgent)
+			if err != nil {
+				home.mu.Lock()
+				home.retryAt = now.Add(retry)
+				home.mu.Unlock()
+				failures = append(failures, err)
+				continue
+			}
+			home.mu.Lock()
+			home.ingester = created
+			ingester = created
+			home.mu.Unlock()
+		}
+		home.mu.Lock()
 		held, seat, err := nerve.TryAcquireSeat(ctx, db, nerve.SeatConfig{
 			SeatID: home.seatID, HomeID: home.pair.ID, HolderToken: home.token,
 			Label: "watch", Destination: "machine", Now: now, Lease: lease,
@@ -177,7 +198,7 @@ func acquireWatchHomes(
 		home.leaseCancel = leaseCancel
 		home.mu.Unlock()
 		_ = log.Append(watchlog.Event{Kind: watchlog.KindLeaseAcquired, HomeID: home.pair.ID, SeatID: seat.SeatID})
-		source, err := filewatch.New(home.ingester.DataRoot(), poll)
+		source, err := filewatch.New(ingester.DataRoot(), poll)
 		if err != nil {
 			standDownWatchHome(ctx, db, home, generation, log, now.Add(retry))
 			failures = append(failures, fmt.Errorf("watch: %w", err))
@@ -193,7 +214,7 @@ func acquireWatchHomes(
 			_ = source.Close()
 			continue
 		}
-		summary, err := home.ingester.Backfill(leaseCtx)
+		summary, err := ingester.Backfill(leaseCtx)
 		if err != nil {
 			standDownWatchHome(ctx, db, home, generation, log, time.Now().UTC().Add(retry))
 			failures = append(failures, err)
@@ -226,7 +247,7 @@ func acquireWatchHomes(
 			Scanned: summary.Scanned, Inserted: summary.Inserted,
 			Unchanged: summary.Unchanged, Wakeups: summary.Wakeups,
 		})
-		*watches = append(*watches, homeWatch{ingester: home.ingester, source: source})
+		*watches = append(*watches, homeWatch{ingester: ingester, source: source})
 		*summaries = append(*summaries, summary)
 	}
 	return errors.Join(failures...)
