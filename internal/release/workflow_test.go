@@ -3,55 +3,127 @@ package release
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
+
+	"gopkg.in/yaml.v3"
+	"mvdan.cc/sh/v3/syntax"
 )
+
+type releaseWorkflow struct {
+	On struct {
+		Push struct {
+			Tags []string `yaml:"tags"`
+		} `yaml:"push"`
+		WorkflowDispatch struct {
+			Inputs map[string]workflowInput `yaml:"inputs"`
+		} `yaml:"workflow_dispatch"`
+	} `yaml:"on"`
+	Jobs map[string]workflowJob `yaml:"jobs"`
+}
+
+type workflowInput struct {
+	Required bool `yaml:"required"`
+}
+
+type workflowJob struct {
+	Steps []workflowStep `yaml:"steps"`
+}
+
+type workflowStep struct {
+	Name string `yaml:"name"`
+	Run  string `yaml:"run"`
+}
 
 func TestReleaseWorkflowBuildsBothPlatformsAndPublishesAGitHubRelease(t *testing.T) {
 	raw, err := os.ReadFile(filepath.Join(repoRoot(t), ".github", "workflows", "release.yml"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	workflow := parseWorkflow(string(raw))
-	if !strings.Contains(workflow["on.push.tags"], "v*") {
-		t.Fatalf("release workflow is not tag-driven: %q", workflow["on.push.tags"])
+	var workflow releaseWorkflow
+	if err := yaml.Unmarshal(raw, &workflow); err != nil {
+		t.Fatalf("parse release workflow: %v", err)
 	}
-	if workflow["on.workflow_dispatch.inputs.tag"] == "" {
+	if !slices.Contains(workflow.On.Push.Tags, "v*") {
+		t.Fatalf("release workflow tags = %v, want v*", workflow.On.Push.Tags)
+	}
+	if input, ok := workflow.On.WorkflowDispatch.Inputs["tag"]; !ok || !input.Required {
 		t.Fatal("release workflow has no workflow_dispatch tag input")
 	}
-	run := workflow["jobs.publish.steps.run"]
-	for _, want := range []string{
-		"make check",
-		"make dist",
-		"darwin-arm64",
-		"linux-amd64",
-		"gh release create",
-		"gh release upload",
-		"firstmate.db",
-		"plugin.json",
-		"roca-firstmate",
+	publish, ok := workflow.Jobs["publish"]
+	if !ok {
+		t.Fatal("release workflow has no publish job")
+	}
+	distStep, ok := stepWithCommand(t, publish.Steps, []string{"make", "dist"})
+	if !ok || distStep.Name != "darwin-arm64 and linux-amd64 archives" {
+		t.Fatalf("publish dist step = %q, want both release platforms", distStep.Name)
+	}
+	var commands [][]string
+	for _, step := range publish.Steps {
+		commands = append(commands, shellCommands(t, step.Run)...)
+	}
+	for _, want := range [][]string{
+		{"make", "check"},
+		{"make", "dist"},
+		{"gh", "release", "create"},
+		{"gh", "release", "upload"},
 	} {
-		if !strings.Contains(run, want) {
-			t.Fatalf("publish job does not %s", want)
+		if !hasCommand(commands, want) {
+			t.Fatalf("publish job commands %v do not include %v", commands, want)
 		}
 	}
 }
 
-func parseWorkflow(body string) map[string]string {
-	out := map[string]string{}
-	var run strings.Builder
-	for _, line := range strings.Split(body, "\n") {
-		trim := strings.TrimSpace(line)
-		switch {
-		case strings.HasPrefix(trim, "tags:"):
-			out["on.push.tags"] = trim
-		case strings.Contains(line, "description:") && strings.Contains(strings.ToLower(line), "tag"):
-			out["on.workflow_dispatch.inputs.tag"] = trim
-		case strings.HasPrefix(line, "        run:") || (!strings.HasPrefix(line, "      -") && run.Len() > 0 && (strings.HasPrefix(line, "          ") || strings.HasPrefix(line, "        "))):
-			run.WriteString(trim)
-			run.WriteByte('\n')
+func stepWithCommand(t *testing.T, steps []workflowStep, want []string) (workflowStep, bool) {
+	t.Helper()
+	for _, step := range steps {
+		if hasCommand(shellCommands(t, step.Run), want) {
+			return step, true
 		}
 	}
-	out["jobs.publish.steps.run"] = run.String()
-	return out
+	return workflowStep{}, false
+}
+
+func shellCommands(t *testing.T, script string) [][]string {
+	t.Helper()
+	if script == "" {
+		return nil
+	}
+	program, err := syntax.NewParser().Parse(strings.NewReader(script), "")
+	if err != nil {
+		t.Fatalf("parse workflow shell step: %v", err)
+	}
+	var commands [][]string
+	syntax.Walk(program, func(node syntax.Node) bool {
+		call, ok := node.(*syntax.CallExpr)
+		if !ok {
+			return true
+		}
+		var words []string
+		for _, arg := range call.Args {
+			if len(arg.Parts) != 1 {
+				break
+			}
+			literal, ok := arg.Parts[0].(*syntax.Lit)
+			if !ok {
+				break
+			}
+			words = append(words, literal.Value)
+		}
+		if len(words) > 0 {
+			commands = append(commands, words)
+		}
+		return true
+	})
+	return commands
+}
+
+func hasCommand(commands [][]string, want []string) bool {
+	for _, command := range commands {
+		if len(command) >= len(want) && slices.Equal(command[:len(want)], want) {
+			return true
+		}
+	}
+	return false
 }

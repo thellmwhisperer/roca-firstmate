@@ -104,6 +104,39 @@ func TestPackageRewritesManifestVersionAndRequiresPluginBinary(t *testing.T) {
 	}
 }
 
+func TestPackagePreservesExistingPayloadWhenOutputContainsUnmanagedEntry(t *testing.T) {
+	out := packageRepo(t, fakeBinary(t, "n1"), "")
+	before := map[string][]byte{}
+	for _, name := range append(payloadNames(), checksumsFilename) {
+		raw, err := os.ReadFile(filepath.Join(out, name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		before[name] = raw
+	}
+	if err := os.WriteFile(filepath.Join(out, "zzz-note"), []byte("unmanaged"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	err := Package(Options{
+		RepoRoot: repoRoot(t),
+		Binary:   fakeBinary(t, "n2"),
+		OutDir:   out,
+	})
+	if err == nil || !strings.Contains(err.Error(), "zzz-note") {
+		t.Fatalf("package with unmanaged output error = %v", err)
+	}
+	for name, want := range before {
+		got, err := os.ReadFile(filepath.Join(out, name))
+		if err != nil {
+			t.Fatalf("read preserved %s: %v", name, err)
+		}
+		if string(got) != string(want) {
+			t.Fatalf("existing %s changed after validation failure", name)
+		}
+	}
+}
+
 func TestArchiveContainsOnlyPackageRootPayload(t *testing.T) {
 	out := packageRepo(t, fakeBinary(t, "n1"), "0.5.0")
 	archive := filepath.Join(t.TempDir(), "roca-firstmate-v0.5.0-darwin-arm64.tar.gz")

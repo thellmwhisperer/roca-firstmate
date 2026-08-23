@@ -138,6 +138,8 @@ func prepareOutput(out string) error {
 		if err != nil || !allowed[entry.Name()] || !info.Mode().IsRegular() {
 			return fmt.Errorf("package output contains an unmanaged entry %s", filepath.Join(absolute, entry.Name()))
 		}
+	}
+	for _, entry := range entries {
 		if err := os.Remove(filepath.Join(absolute, entry.Name())); err != nil {
 			return fmt.Errorf("clear packaged file %s: %w", entry.Name(), err)
 		}
