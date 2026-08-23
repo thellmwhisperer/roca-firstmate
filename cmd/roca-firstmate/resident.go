@@ -69,6 +69,10 @@ type watchIngester interface {
 	IngestPath(context.Context, string) (scribe.Event, error)
 }
 
+type watchSeatStore interface {
+	ExecContext(context.Context, string, ...any) (sql.Result, error)
+}
+
 func runWatch(
 	ctx context.Context, dbPath string, pairs []homePair, values scribeFlags,
 	stdin io.Reader, stdout, stderr io.Writer,
@@ -139,10 +143,18 @@ func runWatchWithDatabase(
 	}
 	defer db.Close()
 	defer func() {
-		cleanupCtx, cleanupCancel := context.WithTimeout(ctx, defaultWatchShutdownTimeout)
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), defaultWatchShutdownTimeout)
 		defer cleanupCancel()
+		var cleanupStore watchSeatStore
+		cleanupConn, err := db.Conn(cleanupCtx)
+		if err == nil {
+			defer cleanupConn.Close()
+			if _, err := cleanupConn.ExecContext(cleanupCtx, `PRAGMA busy_timeout = 100`); err == nil {
+				cleanupStore = cleanupConn
+			}
+		}
 		for _, home := range homes {
-			standDownWatchHome(cleanupCtx, db, home, 0, log, time.Time{})
+			standDownWatchHome(cleanupCtx, cleanupStore, home, 0, log, time.Time{})
 		}
 	}()
 
@@ -431,7 +443,7 @@ func heartbeatWatchHomes(
 }
 
 func standDownWatchHome(
-	ctx context.Context, db *sql.DB, home *leasedHome, generation uint64,
+	ctx context.Context, db watchSeatStore, home *leasedHome, generation uint64,
 	log *watchTelemetry, retryAt time.Time,
 ) {
 	home.mu.Lock()
@@ -441,7 +453,7 @@ func standDownWatchHome(
 }
 
 func standDownWatchHomeLocked(
-	ctx context.Context, db *sql.DB, home *leasedHome, generation uint64, retryAt time.Time,
+	ctx context.Context, db watchSeatStore, home *leasedHome, generation uint64, retryAt time.Time,
 ) (filewatch.Source, bool) {
 	if generation != 0 && home.generation != generation {
 		return nil, false
@@ -458,7 +470,9 @@ func standDownWatchHomeLocked(
 	home.standbyUntil = time.Time{}
 	if lost {
 		home.holding = false
-		_ = nerve.ReleaseSeat(ctx, db, home.seatID, home.token, time.Now().UTC())
+		if db != nil {
+			_ = nerve.ReleaseSeat(ctx, db, home.seatID, home.token, time.Now().UTC())
+		}
 	}
 	home.retryAt = retryAt
 	return closedSource, lost

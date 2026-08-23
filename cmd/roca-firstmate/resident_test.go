@@ -512,6 +512,39 @@ func TestWatchShutdownBoundsLeaseRelease(t *testing.T) {
 	locked = false
 }
 
+func TestWatchShutdownReleasesLeaseWhenAvailable(t *testing.T) {
+	clearHomeEnv(t)
+	t.Setenv("ROCA_FIRSTMATE_WATCH_LEASE", "30s")
+	t.Setenv("ROCA_FIRSTMATE_WATCH_RETRY", "10s")
+	path := appliedDBPath(t)
+	home := fabricatedHome(t, "northwind-harbor")
+	proc := startWatch(t, path, home, "northwind-harbor")
+	waitWatching(t, proc)
+	if err := proc.stdin.Close(); err != nil {
+		t.Fatal(err)
+	}
+	waitExit(t, proc.done, time.Second)
+	db, err := openDatabase(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	token, err := nerve.NewHolderToken()
+	if err != nil {
+		t.Fatal(err)
+	}
+	held, seat, err := nerve.TryAcquireSeat(context.Background(), db, nerve.SeatConfig{
+		HomeID: "northwind-harbor", HolderToken: token, Destination: "machine",
+		Now: time.Now().UTC(), Lease: 30 * time.Second,
+	})
+	if err != nil || !held {
+		t.Fatalf("replacement lease held=%v err=%v", held, err)
+	}
+	if err := nerve.ReleaseSeat(context.Background(), db, seat.SeatID, token, time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestWatchResidentRetriesTransientDatabaseLock(t *testing.T) {
 	clearHomeEnv(t)
 	t.Setenv("ROCA_FIRSTMATE_WATCH_RETRY", "50ms")

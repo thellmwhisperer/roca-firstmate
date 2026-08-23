@@ -14,6 +14,10 @@ const watchSeatPrefix = "watch-"
 
 const leaseTimeLayout = "2006-01-02T15:04:05.000000000Z07:00"
 
+type seatExecer interface {
+	ExecContext(context.Context, string, ...any) (sql.Result, error)
+}
+
 // WatchSeatID is the single-flight seat identity for one home's filesystem
 // watcher. Concurrent MCP sessions compete for this row; they do not invent a
 // second lock.
@@ -180,7 +184,7 @@ func RenewSeat(ctx context.Context, db *sql.DB, seatID, holderToken string, now 
 
 // ReleaseSeat expires a watch lease this holder owns so the next candidate can
 // inherit without waiting out the remaining window.
-func ReleaseSeat(ctx context.Context, db *sql.DB, seatID, holderToken string, now time.Time) error {
+func ReleaseSeat(ctx context.Context, db seatExecer, seatID, holderToken string, now time.Time) error {
 	seatID = strings.TrimSpace(seatID)
 	holderToken = strings.TrimSpace(holderToken)
 	if seatID == "" || holderToken == "" {
