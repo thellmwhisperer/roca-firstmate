@@ -35,7 +35,7 @@ Markdown file -> version row -> SQL trigger -> companion wakeup
 
 An unchanged fingerprint creates neither a duplicate version nor a wakeup. Cursor identities are home-relative; absolute home paths are never persisted.
 
-Every verb accepts repeated `--home PATH --home-id ID` positional pairs to cover more than one fabricated home in a single process; unbalanced flags exit 2. `--label` and `--kind` are also repeatable alongside those pairs. A single `--kind` broadcasts to every pair, and an omitted kind defaults to `primary`. Flags only, no config file. One process owns `firstmate.db`. Existing single-home commands keep their byte-identical output.
+The home-aware verbs accept repeated `--home PATH --home-id ID` positional pairs to cover more than one fabricated home in a single process; unbalanced flags exit 2. `--label` and `--kind` are also repeatable alongside those pairs. A single `--kind` broadcasts to every pair, and an omitted kind defaults to `primary`. Flags only, no config file. All homes and concurrent session-owned watchers coordinate through one `firstmate.db`. Existing single-home commands keep their byte-identical output.
 
 ```sh
 roca-firstmate scribe --home '<fabricated home>' --home-id northwind-harbor --db firstmate.db
@@ -44,7 +44,7 @@ roca-firstmate watch \
   --home '<fabricated primary home>' --home-id northwind-harbor --kind primary \
   --home '<fabricated second-mate home>' --home-id skiff-secondmate --kind secondmate \
   --db firstmate.db
-roca-firstmate place
+roca-firstmate place --dir '<plugin directory>'
 ```
 
 `watch` opens one recursive FSEvents subscription per home on macOS when cgo is available, and polling elsewhere. On rise it fingerprint-sweeps first so writes made while nobody listened are absorbed, then it stays on live events. Concurrent `watch` processes compete for the existing `seats` lease of `watch-<home-id>` (destination `machine`): the holder watches, the others stand down, and a released or expired lease is inherited on the next retry. `scribe` ingests each home in sequence. Nerve adds ingest-on-read: `attach`, `chart`, `follow`, and `tick` run Scribe's fingerprint sweep for each supplied pair before answering. For `chart` and `follow`, unpaired `--home-id` values filter already-registered homes, while omitting the filter reads every registered home. Supplying paired `--home PATH --home-id ID` values refreshes those homes but does not filter output.

@@ -242,9 +242,11 @@ CREATE INDEX wakeups_unhandled
 CREATE INDEX wakeups_generation
   ON wakeups(generation);
 
--- A seat is an attached workspace subscription. workspace_fingerprint is an
--- opaque hash; absolute workspace paths never enter the federated database.
--- Leases make orphan recovery and the silence clock entirely persistent.
+-- A seat is either an attached workspace subscription or an internal watch
+-- holder. workspace_fingerprint stores an opaque workspace hash for the former
+-- and an opaque holder token for the latter; absolute paths never enter the
+-- federated database. Leases make ownership, orphan recovery, and the silence
+-- clock entirely persistent.
 CREATE TABLE seats (
   seat_id TEXT PRIMARY KEY,
   home_id TEXT NOT NULL REFERENCES homes(home_id),
