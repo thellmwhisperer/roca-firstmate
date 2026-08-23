@@ -96,10 +96,19 @@ func TryAcquireSeat(ctx context.Context, db *sql.DB, config SeatConfig) (bool, S
 		return false, Seat{}, err
 	}
 	if changed == 0 {
+		var current Seat
+		if err := tx.QueryRowContext(ctx, `SELECT seat_id, home_id, label, destination, attached_at, lease_until
+			FROM seats WHERE seat_id = ?`, seatID).Scan(
+			&current.SeatID, &current.HomeID, &current.Label, &current.Destination,
+			&current.AttachedAt, &current.LeaseUntil,
+		); err != nil {
+			return false, Seat{}, fmt.Errorf("read standby watch lease: %w", err)
+		}
 		if err := tx.Commit(); err != nil {
 			return false, Seat{}, err
 		}
-		return false, Seat{}, nil
+		current.Status = "standby"
+		return false, current, nil
 	}
 	var attachedAt, leaseUntil string
 	if err := tx.QueryRowContext(ctx, `SELECT attached_at, lease_until FROM seats WHERE seat_id = ?`, seatID).

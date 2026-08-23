@@ -98,6 +98,54 @@ func TestWatchResidentSingleFlightAndTakeover(t *testing.T) {
 	waitExit(t, standin.done, 3*time.Second)
 }
 
+func TestWatchStandbyAttemptsAtObservedLeaseDeadline(t *testing.T) {
+	clearHomeEnv(t)
+	t.Setenv("ROCA_FIRSTMATE_WATCH_LEASE", "400ms")
+	t.Setenv("ROCA_FIRSTMATE_WATCH_RETRY", "2s")
+	path := appliedDBPath(t)
+	home := fabricatedHome(t, "northwind-harbor")
+	db, err := openDatabase(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if err := scribe.EnsureHome(context.Background(), db, scribe.Config{
+		Home: home, HomeID: "northwind-harbor", SourceAgent: "firstmate",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	token, err := nerve.NewHolderToken()
+	if err != nil {
+		t.Fatal(err)
+	}
+	held, _, err := nerve.TryAcquireSeat(context.Background(), db, nerve.SeatConfig{
+		HomeID: "northwind-harbor", HolderToken: token, Destination: "machine",
+		Now: time.Now().UTC(), Lease: 400 * time.Millisecond,
+	})
+	if err != nil || !held {
+		t.Fatalf("foreign lease held=%v err=%v", held, err)
+	}
+	proc := startWatch(t, path, home, "northwind-harbor")
+	deadline := time.Now().Add(1500 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		if strings.Contains(proc.out.String(), `"status":"watching"`) {
+			if err := proc.stdin.Close(); err != nil {
+				t.Fatal(err)
+			}
+			waitExit(t, proc.done, time.Second)
+			return
+		}
+		select {
+		case code := <-proc.done:
+			t.Fatalf("standby exited %d before takeover stdout=%q stderr=%q", code, proc.out.String(), proc.err.String())
+		default:
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	_ = proc.stdin.Close()
+	t.Fatal("standby did not acquire at the observed lease deadline")
+}
+
 func TestWatchTakeoverRefreshesCachedFingerprintState(t *testing.T) {
 	path := appliedDBPath(t)
 	db, err := openDatabase(path)
@@ -386,12 +434,17 @@ func TestWatchResidentRetriesRuntimeInitialization(t *testing.T) {
 func TestWatchRejectsPermanentDatabaseConfiguration(t *testing.T) {
 	clearHomeEnv(t)
 	home := fabricatedHome(t, "northwind-harbor")
+	corrupt := filepath.Join(t.TempDir(), "corrupt.db")
+	if err := os.WriteFile(corrupt, []byte("not a sqlite database"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	for _, test := range []struct {
 		name string
 		path string
 	}{
 		{name: "missing", path: filepath.Join(t.TempDir(), "missing.db")},
 		{name: "directory", path: t.TempDir()},
+		{name: "corrupt", path: corrupt},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			stdout := &safeBuffer{}
@@ -411,6 +464,52 @@ func TestWatchRejectsPermanentDatabaseConfiguration(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestWatchDatabaseOpenClassification(t *testing.T) {
+	if !retryableSQLiteCode(14) {
+		t.Fatal("SQLite CANTOPEN was not retryable after path preflight")
+	}
+	if retryableSQLiteCode(26) {
+		t.Fatal("SQLite NOTADB entered the retry lifecycle")
+	}
+}
+
+func TestWatchShutdownBoundsLeaseRelease(t *testing.T) {
+	clearHomeEnv(t)
+	t.Setenv("ROCA_FIRSTMATE_WATCH_LEASE", "30s")
+	t.Setenv("ROCA_FIRSTMATE_WATCH_RETRY", "10s")
+	path := appliedDBPath(t)
+	home := fabricatedHome(t, "northwind-harbor")
+	proc := startWatch(t, path, home, "northwind-harbor")
+	waitWatching(t, proc)
+	locker, err := sql.Open("sqlite", "file:"+path+"?_pragma=busy_timeout(0)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer locker.Close()
+	conn, err := locker.Conn(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	if _, err := conn.ExecContext(context.Background(), "BEGIN IMMEDIATE"); err != nil {
+		t.Fatal(err)
+	}
+	locked := true
+	defer func() {
+		if locked {
+			_, _ = conn.ExecContext(context.Background(), "ROLLBACK")
+		}
+	}()
+	if err := proc.stdin.Close(); err != nil {
+		t.Fatal(err)
+	}
+	waitExit(t, proc.done, time.Second)
+	if _, err := conn.ExecContext(context.Background(), "ROLLBACK"); err != nil {
+		t.Fatal(err)
+	}
+	locked = false
 }
 
 func TestWatchResidentRetriesTransientDatabaseLock(t *testing.T) {
