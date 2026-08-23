@@ -20,7 +20,12 @@
 	  Wakeup             One delivered queue row
 	  TickResult         Ephemeral tick summary
 		WorkspaceSeatID()  Stable path-derived identity
+		WatchSeatID()      Stable watch-holder identity for one home
+		NewHolderToken()   Opaque single-flight token, never a path
 		RegisterSeat()     Create or refresh a seat lease
+		TryAcquireSeat()   Take a watch lease only when free or expired
+		RenewSeat()        Heartbeat a watch lease this holder already owns
+		ReleaseSeat()      Drop a watch lease so the next candidate can inherit
 		LastHandoff()      Read the latest mirrored handoff
 		Follow()           Subscribe to WAL changes and drain one destination (optional home filter)
 		Drain()            Deliver and generation-confirm pending rows
@@ -31,7 +36,7 @@
 		---------
 		heartbeat, homeIDFilter, silenceClock, drainOrphans, drainDestination, claimNext, nextGeneration
 
-@exports SeatConfig, Seat, Handoff, Wakeup, TickResult, WorkspaceSeatID, RegisterSeat, LastHandoff, Follow, Drain, DrainMatching, Tick
+@exports SeatConfig, Seat, Handoff, Wakeup, TickResult, WorkspaceSeatID, WatchSeatID, NewHolderToken, RegisterSeat, TryAcquireSeat, RenewSeat, ReleaseSeat, LastHandoff, Follow, Drain, DrainMatching, Tick
 @deps database/sql queue state; encoding/json one-line envelopes; filesystem watcher in wal_*.go
 */
 package nerve
@@ -62,9 +67,11 @@ type SeatConfig struct {
 	SeatID      string
 	HomeID      string
 	Workspace   string
+	HolderToken string
 	Label       string
 	Destination string
 	Now         time.Time
+	Lease       time.Duration
 }
 
 // Seat is the bounded registration result.

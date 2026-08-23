@@ -196,7 +196,7 @@ func TestWatchTwoHomesTagsTouchedFiles(t *testing.T) {
 			"watch", "--db", path, "--json", "--poll-interval", "20ms",
 			"--home", harbor, "--home-id", "northwind-harbor", "--kind", "primary",
 			"--home", skiff, "--home-id", "skiff-secondmate", "--kind", "secondmate",
-		}, out, errBuf)
+		}, nil, out, errBuf)
 	}()
 	deadline := time.Now().Add(8 * time.Second)
 	for time.Now().Before(deadline) {

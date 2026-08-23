@@ -9,9 +9,7 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"path/filepath"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/thellmwhisperer/roca-firstmate/internal/chart"
@@ -581,76 +579,6 @@ type watchMsg struct {
 	eof  bool
 }
 
-func runWatch(ctx context.Context, db *sql.DB, pairs []homePair, values scribeFlags, stdout io.Writer) int {
-	watches := make([]homeWatch, 0, len(pairs))
-	summaries := make([]scribe.Summary, 0, len(pairs))
-	for _, pair := range pairs {
-		ingester, err := newIngester(ctx, db, pair, values.sourceAgent)
-		if err != nil {
-			printScribeError(stdout, err)
-			return exitError
-		}
-		source, err := filewatch.New(ingester.DataRoot(), values.pollInterval)
-		if err != nil {
-			printScribeError(stdout, fmt.Errorf("watch: %w", err))
-			closeWatches(watches)
-			return exitError
-		}
-		summary, err := ingester.Backfill(ctx)
-		if err != nil {
-			source.Close()
-			printScribeError(stdout, err)
-			closeWatches(watches)
-			return exitError
-		}
-		watches = append(watches, homeWatch{ingester: ingester, source: source})
-		summaries = append(summaries, summary)
-	}
-	defer closeWatches(watches)
-	if err := renderWatchStarts(stdout, values.asJSON, watchBackend(watches), summaries); err != nil {
-		printScribeError(stdout, err)
-		return exitError
-	}
-	for msg := range fanInWatch(ctx, watches) {
-		if msg.err != nil {
-			printScribeError(stdout, msg.err)
-			return exitError
-		}
-		if msg.eof {
-			return exitError
-		}
-		ingester := watches[msg.idx].ingester
-		if filepath.Clean(msg.path) == filepath.Clean(ingester.DataRoot()) {
-			recovery, err := ingester.Backfill(ctx)
-			if err != nil {
-				printScribeError(stdout, err)
-				return exitError
-			}
-			if err := renderScribe(stdout, values.asJSON, recovery); err != nil {
-				printScribeError(stdout, err)
-				return exitError
-			}
-			continue
-		}
-		event, err := ingester.IngestPath(ctx, msg.path)
-		if err != nil {
-			printScribeError(stdout, err)
-			return exitError
-		}
-		if !event.Inserted {
-			continue
-		}
-		if err := renderScribe(stdout, values.asJSON, event); err != nil {
-			printScribeError(stdout, err)
-			return exitError
-		}
-	}
-	if ctx.Err() != nil {
-		return exitOK
-	}
-	return exitError
-}
-
 func renderWatchStarts(w io.Writer, asJSON bool, backend string, summaries []scribe.Summary) error {
 	if len(summaries) <= 1 {
 		var one scribe.Summary
@@ -691,57 +619,4 @@ func watchBackend(watches []homeWatch) string {
 		}
 	}
 	return backend
-}
-
-func closeWatches(watches []homeWatch) {
-	for _, watch := range watches {
-		_ = watch.source.Close()
-	}
-}
-
-func fanInWatch(ctx context.Context, watches []homeWatch) <-chan watchMsg {
-	out := make(chan watchMsg, 16)
-	var wg sync.WaitGroup
-	for i, watch := range watches {
-		wg.Add(1)
-		go func(i int, watch homeWatch) {
-			defer wg.Done()
-			events := watch.source.Events()
-			errs := watch.source.Errors()
-			for events != nil || errs != nil {
-				select {
-				case <-ctx.Done():
-					return
-				case err, ok := <-errs:
-					if !ok {
-						errs = nil
-						continue
-					}
-					select {
-					case out <- watchMsg{idx: i, err: err}:
-					case <-ctx.Done():
-					}
-					return
-				case path, ok := <-events:
-					if !ok {
-						events = nil
-						select {
-						case out <- watchMsg{idx: i, eof: true}:
-						case <-ctx.Done():
-						}
-						return
-					}
-					select {
-					case out <- watchMsg{idx: i, path: path}:
-					case <-ctx.Done():
-					}
-				}
-			}
-		}(i, watch)
-	}
-	go func() {
-		wg.Wait()
-		close(out)
-	}()
-	return out
 }

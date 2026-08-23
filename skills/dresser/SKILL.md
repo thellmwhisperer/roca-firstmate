@@ -71,6 +71,8 @@ roca-firstmate tick --silence-after 5m
 
 Tick keeps no in-memory state. Seat leases, silence generations, wakeup generations, and handled generations live in `firstmate.db`. A resident daemon subcommand may be added later, but it is not part of the default v1 recipe.
 
+`watch` is the session-owned ear, not a daemon: a parent that owns stdin can raise `roca-firstmate watch` as a child that dies when the session ends. Place the independently versioned executable in the plugin directory with `roca-firstmate place` so the parent resolves it there. Concurrent sessions share the existing `seats` lease; only the holder listens. Telemetry is JSONL next to `firstmate.db`, never a new table.
+
 ## 4. History through SQL
 
 The chart is a bounded window. Pull history with gated SQL against alias `plugin_roca_firstmate`:

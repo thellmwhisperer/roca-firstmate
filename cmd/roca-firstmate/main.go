@@ -32,14 +32,14 @@ const (
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	os.Exit(runContext(ctx, os.Args[1:], os.Stdout, os.Stderr))
+	os.Exit(runContext(ctx, os.Args[1:], os.Stdin, os.Stdout, os.Stderr))
 }
 
 func run(args []string, stdout, stderr io.Writer) int {
-	return runContext(context.Background(), args, stdout, stderr)
+	return runContext(context.Background(), args, nil, stdout, stderr)
 }
 
-func runContext(ctx context.Context, args []string, stdout, stderr io.Writer) int {
+func runContext(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	if len(args) == 0 || args[0] == "attach" {
 		if len(args) > 0 {
 			args = args[1:]
@@ -56,10 +56,13 @@ func runContext(ctx context.Context, args []string, stdout, stderr io.Writer) in
 		return runTick(ctx, args[1:], stdout, stderr)
 	}
 	if args[0] == "scribe" {
-		return runScribe(ctx, args[1:], stdout, stderr, false)
+		return runScribe(ctx, args[1:], nil, stdout, stderr, false)
 	}
 	if args[0] == "watch" {
-		return runScribe(ctx, args[1:], stdout, stderr, true)
+		return runScribe(ctx, args[1:], stdin, stdout, stderr, true)
+	}
+	if args[0] == "place" {
+		return runPlace(args[1:], stdout, stderr)
 	}
 	if args[0] == "--help" || args[0] == "-h" {
 		usage(stdout)
@@ -78,7 +81,7 @@ type scribeFlags struct {
 	pollInterval time.Duration
 }
 
-func runScribe(ctx context.Context, args []string, stdout, stderr io.Writer, continuous bool) int {
+func runScribe(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer, continuous bool) int {
 	name := "scribe"
 	if continuous {
 		name = "watch"
@@ -144,7 +147,7 @@ func runScribe(ctx context.Context, args []string, stdout, stderr io.Writer, con
 		}
 		return exitOK
 	}
-	return runWatch(ctx, db, req.Pairs, values, stdout)
+	return runWatch(ctx, db, req.Pairs, values, stdin, stdout)
 }
 
 func openDatabase(path string) (*sql.DB, error) {
@@ -253,6 +256,7 @@ Usage:
   roca-firstmate tick --home PATH --home-id ID [--db PATH] [--silence-after 5m]
   roca-firstmate scribe --home PATH --home-id ID [--db PATH] [--json]
   roca-firstmate watch --home PATH --home-id ID [--db PATH] [--json]
+  roca-firstmate place [--dir PATH]
   roca-firstmate --help
 
 Repeat --home PATH --home-id ID as positional pairs. Unbalanced flags exit 2.
@@ -270,6 +274,10 @@ scribe is the total one-shot backfill and nightly fingerprint safety net.
 watch performs that backfill, then uses one FSEvents subscription per home on
 macOS with polling fallback. Every changed Markdown file under a home's data
 becomes one new version row and one SQL-triggered wakeup tagged with home_id.
+A session-owned parent (stdin/stdout, no port, no pid file) can raise watch as
+a child that dies when stdin closes. Seat leases keep one holder per home;
+stand-down children inherit when the holder exits. place copies this executable
+into a plugin directory so a session parent can resolve it without PATH luck.
 
 Every plugin verb fingerprint-sweeps Markdown before answering. There is no init ceremony.
 
@@ -296,6 +304,9 @@ Scribe/watch flags:
   --kind string          primary or secondmate (default primary; repeatable)
   --source-agent string  cursor provenance (default firstmate)
   --poll-interval value  fallback interval (default 30s)
+
+Place flags:
+  --dir string  plugin directory that should hold the roca-firstmate executable
 `)
 }
 
