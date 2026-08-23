@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -71,10 +72,58 @@ type watchIngester interface {
 }
 
 type watchActivation struct {
-	idx     int
-	watch   homeWatch
-	summary scribe.Summary
-	err     error
+	idx        int
+	generation uint64
+	watch      homeWatch
+	summary    scribe.Summary
+	err        error
+}
+
+type watchReadyState struct {
+	activations []watchActivation
+	known       []bool
+	announced   []uint64
+}
+
+func (r *watchReadyState) update(
+	homes []*leasedHome, activation watchActivation, now time.Time,
+) ([]homeWatch, []scribe.Summary, bool) {
+	if activation.idx >= 0 && activation.idx < len(homes) &&
+		activation.err == nil && activation.watch.source != nil &&
+		watchActivationHeld(homes[activation.idx], activation.generation, now) {
+		previous := r.activations[activation.idx]
+		if !r.known[activation.idx] || activation.generation >= previous.generation {
+			r.activations[activation.idx] = activation
+			r.known[activation.idx] = true
+		}
+	}
+	watches := make([]homeWatch, 0, len(homes))
+	summaries := make([]scribe.Summary, 0, len(homes))
+	generations := make([]uint64, len(homes))
+	for i, home := range homes {
+		if !r.known[i] {
+			continue
+		}
+		ready := r.activations[i]
+		if !watchActivationHeld(home, ready.generation, now) {
+			continue
+		}
+		watches = append(watches, ready.watch)
+		summaries = append(summaries, ready.summary)
+		generations[i] = ready.generation
+	}
+	if len(watches) == 0 || slices.Equal(generations, r.announced) {
+		return nil, nil, false
+	}
+	r.announced = generations
+	return watches, summaries, true
+}
+
+func watchActivationHeld(home *leasedHome, generation uint64, now time.Time) bool {
+	home.mu.Lock()
+	defer home.mu.Unlock()
+	return home.holding && home.generation == generation && home.source != nil &&
+		home.leaseCtx != nil && home.leaseCtx.Err() == nil && now.Before(home.leaseUntil)
 }
 
 type watchSeatStore interface {
@@ -191,14 +240,15 @@ func runWatchWithDatabase(
 		stopHeartbeat()
 		<-heartbeatDone
 	}()
-	pendingActivations, err := acquireWatchHomes(ctx, db, homes, values.pollInterval, lease, retry, log, msgs, activations)
+	_, err := acquireWatchHomes(ctx, db, homes, values.pollInterval, lease, retry, log, msgs, activations)
 	if err != nil {
 		logWatchRetry(log, &attempts, err)
 	}
-	announced := false
-	readyWatches := make([]homeWatch, len(homes))
-	readySummaries := make([]scribe.Summary, len(homes))
-	readyHomes := make([]bool, len(homes))
+	readiness := watchReadyState{
+		activations: make([]watchActivation, len(homes)),
+		known:       make([]bool, len(homes)),
+		announced:   make([]uint64, len(homes)),
+	}
 
 	attemptTimer := time.NewTimer(nextWatchAttempt(homes, retry))
 	defer attemptTimer.Stop()
@@ -207,40 +257,17 @@ func runWatchWithDatabase(
 		case <-ctx.Done():
 			return exitOK
 		case <-attemptTimer.C:
-			started, err := acquireWatchHomes(ctx, db, homes, values.pollInterval, lease, retry, log, msgs, activations)
-			if !announced {
-				pendingActivations += started
-			}
+			_, err := acquireWatchHomes(ctx, db, homes, values.pollInterval, lease, retry, log, msgs, activations)
 			if err != nil {
 				logWatchRetry(log, &attempts, err)
 			}
 			attemptTimer.Reset(nextWatchAttempt(homes, retry))
 		case activation := <-activations:
-			if !announced {
-				if pendingActivations > 0 {
-					pendingActivations--
-				}
-				if activation.err == nil && activation.watch.source != nil {
-					readyWatches[activation.idx] = activation.watch
-					readySummaries[activation.idx] = activation.summary
-					readyHomes[activation.idx] = true
-				}
-				if pendingActivations == 0 {
-					watches := make([]homeWatch, 0, len(homes))
-					summaries := make([]scribe.Summary, 0, len(homes))
-					for i := range homes {
-						if readyHomes[i] {
-							watches = append(watches, readyWatches[i])
-							summaries = append(summaries, readySummaries[i])
-						}
-					}
-					if len(watches) > 0 {
-						if err := renderWatchStarts(stdout, values.asJSON, watchBackend(watches), summaries); err != nil {
-							printScribeError(stdout, err)
-							return exitError
-						}
-						announced = true
-					}
+			watches, summaries, changed := readiness.update(homes, activation, time.Now().UTC())
+			if changed {
+				if err := renderWatchStarts(stdout, values.asJSON, watchBackend(watches), summaries); err != nil {
+					printScribeError(stdout, err)
+					return exitError
 				}
 			}
 			if activation.err != nil {
@@ -376,7 +403,7 @@ func activateWatchHome(
 	ingester, err := factory(leaseCtx, db, home)
 	if err != nil {
 		standDownWatchHome(ctx, db, home, generation, log, time.Now().UTC().Add(retry))
-		activate(watchActivation{idx: idx, err: err})
+		activate(watchActivation{idx: idx, generation: generation, err: err})
 		return
 	}
 	home.mu.Lock()
@@ -386,14 +413,14 @@ func activateWatchHome(
 	}
 	home.mu.Unlock()
 	if !active {
-		activate(watchActivation{idx: idx, err: errors.New("watch lease lost during activation")})
+		activate(watchActivation{idx: idx, generation: generation, err: errors.New("watch lease lost during activation")})
 		return
 	}
 	source, err := filewatch.New(ingester.DataRoot(), poll)
 	if err != nil {
 		err = fmt.Errorf("watch: %w", err)
 		standDownWatchHome(ctx, db, home, generation, log, time.Now().UTC().Add(retry))
-		activate(watchActivation{idx: idx, err: err})
+		activate(watchActivation{idx: idx, generation: generation, err: err})
 		return
 	}
 	home.mu.Lock()
@@ -404,19 +431,19 @@ func activateWatchHome(
 	home.mu.Unlock()
 	if !active {
 		_ = source.Close()
-		activate(watchActivation{idx: idx, err: errors.New("watch lease lost during activation")})
+		activate(watchActivation{idx: idx, generation: generation, err: errors.New("watch lease lost during activation")})
 		return
 	}
 	summary, err := ingester.Backfill(leaseCtx)
 	if err != nil {
 		standDownWatchHome(ctx, db, home, generation, log, time.Now().UTC().Add(retry))
-		activate(watchActivation{idx: idx, err: err})
+		activate(watchActivation{idx: idx, generation: generation, err: err})
 		return
 	}
 	home.mu.Lock()
 	if !home.holding || home.generation != generation {
 		home.mu.Unlock()
-		activate(watchActivation{idx: idx, err: errors.New("watch lease lost during activation")})
+		activate(watchActivation{idx: idx, generation: generation, err: errors.New("watch lease lost during activation")})
 		return
 	}
 	fenced, deadline, err := renewWatchSeat(leaseCtx, db, home.seatID, home.token, lease)
@@ -431,11 +458,11 @@ func activateWatchHome(
 		home.mu.Unlock()
 	}
 	if err != nil {
-		activate(watchActivation{idx: idx, err: err})
+		activate(watchActivation{idx: idx, generation: generation, err: err})
 		return
 	}
 	if !fenced {
-		activate(watchActivation{idx: idx, err: errors.New("watch lease lost during activation")})
+		activate(watchActivation{idx: idx, generation: generation, err: errors.New("watch lease lost during activation")})
 		return
 	}
 	log.Append(watchlog.Event{
@@ -443,7 +470,10 @@ func activateWatchHome(
 		Scanned: summary.Scanned, Inserted: summary.Inserted,
 		Unchanged: summary.Unchanged, Wakeups: summary.Wakeups,
 	})
-	activate(watchActivation{idx: idx, watch: homeWatch{ingester: ingester, source: source}, summary: summary})
+	activate(watchActivation{
+		idx: idx, generation: generation,
+		watch: homeWatch{ingester: ingester, source: source}, summary: summary,
+	})
 }
 
 func renewWatchSeat(

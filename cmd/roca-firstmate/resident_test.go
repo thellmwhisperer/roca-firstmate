@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"io"
 	"os"
 	"os/exec"
@@ -1176,6 +1177,54 @@ func TestAcquireErrorPreservesDueStandbyDeadline(t *testing.T) {
 	}
 	if delay := nextWatchAttempt([]*leasedHome{home}, 30*time.Second); delay > 500*time.Millisecond {
 		t.Fatalf("next acquisition delayed %s", delay)
+	}
+}
+
+func TestWatchReadinessRevalidatesAndExpandsActiveHomes(t *testing.T) {
+	now := time.Now().UTC()
+	firstSource := &closingWatchSource{}
+	secondSource := &closingWatchSource{}
+	homes := []*leasedHome{
+		{
+			holding: true, generation: 1, source: firstSource,
+			leaseCtx: context.Background(), leaseUntil: now.Add(time.Minute),
+		},
+		{},
+	}
+	readiness := watchReadyState{
+		activations: make([]watchActivation, len(homes)),
+		known:       make([]bool, len(homes)),
+		announced:   make([]uint64, len(homes)),
+	}
+	first := watchActivation{
+		idx: 0, generation: 1, watch: homeWatch{source: firstSource},
+		summary: scribe.Summary{HomeID: "northwind-harbor"},
+	}
+	watches, summaries, changed := readiness.update(homes, first, now)
+	if !changed || len(watches) != 1 || summaries[0].HomeID != "northwind-harbor" {
+		t.Fatalf("first readiness changed=%v watches=%d summaries=%+v", changed, len(watches), summaries)
+	}
+	if _, _, changed := readiness.update(homes, watchActivation{idx: 1, generation: 1, err: errors.New("transient")}, now); changed {
+		t.Fatal("failed second home changed the active readiness set")
+	}
+	homes[1].holding = true
+	homes[1].generation = 1
+	homes[1].source = secondSource
+	homes[1].leaseCtx = context.Background()
+	homes[1].leaseUntil = now.Add(time.Minute)
+	second := watchActivation{
+		idx: 1, generation: 1, watch: homeWatch{source: secondSource},
+		summary: scribe.Summary{HomeID: "skiff-secondmate"},
+	}
+	watches, summaries, changed = readiness.update(homes, second, now)
+	if !changed || len(watches) != 2 || summaries[0].HomeID != "northwind-harbor" || summaries[1].HomeID != "skiff-secondmate" {
+		t.Fatalf("expanded readiness changed=%v watches=%d summaries=%+v", changed, len(watches), summaries)
+	}
+	homes[0].holding = false
+	homes[0].source = nil
+	watches, summaries, changed = readiness.update(homes, first, now)
+	if !changed || len(watches) != 1 || summaries[0].HomeID != "skiff-secondmate" {
+		t.Fatalf("stale readiness changed=%v watches=%d summaries=%+v", changed, len(watches), summaries)
 	}
 }
 
