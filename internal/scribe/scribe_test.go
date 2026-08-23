@@ -121,6 +121,63 @@ func TestFileEventCreatesVersionThenTriggerCreatesWakeup(t *testing.T) {
 	}
 }
 
+func TestIngesterRevalidatesCursorAfterSiblingWrite(t *testing.T) {
+	home := copiedFabricatedHome(t)
+	db := appliedDB(t)
+	config := scribe.Config{Home: home, HomeID: "northwind-harbor", Kind: "primary"}
+	resident, err := scribe.New(context.Background(), db, config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(home, "data", "captain.md")
+	original, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := resident.IngestPath(context.Background(), path)
+	if err != nil || !first.Inserted || first.Version != 1 {
+		t.Fatalf("first event=%+v err=%v", first, err)
+	}
+	sibling, err := scribe.New(context.Background(), db, config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	changed := append([]byte(nil), original...)
+	changed[len(changed)-1] ^= 1
+	if err := os.WriteFile(path, changed, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(path, info.ModTime(), info.ModTime()); err != nil {
+		t.Fatal(err)
+	}
+	second, err := sibling.IngestPath(context.Background(), path)
+	if err != nil || !second.Inserted || second.Version != 2 {
+		t.Fatalf("sibling event=%+v err=%v", second, err)
+	}
+	if err := os.WriteFile(path, original, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(path, info.ModTime(), info.ModTime()); err != nil {
+		t.Fatal(err)
+	}
+	restored, err := resident.IngestPath(context.Background(), path)
+	if err != nil || !restored.Inserted || restored.Version != 3 {
+		t.Fatalf("restored event=%+v err=%v", restored, err)
+	}
+	var current string
+	if err := db.QueryRow(`SELECT content FROM working_set_versions
+		WHERE home_id = ? AND relative_path = ? AND is_current = 1`, "northwind-harbor", "captain.md").Scan(&current); err != nil {
+		t.Fatal(err)
+	}
+	if current != string(original) {
+		t.Fatalf("current content=%q want restored content", current)
+	}
+}
+
 func TestTotalIngestKeepsArbitraryAndNestedMarkdown(t *testing.T) {
 	home := copiedFabricatedHome(t)
 	data := filepath.Join(home, "data")

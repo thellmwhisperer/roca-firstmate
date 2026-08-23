@@ -97,11 +97,36 @@ func copyExecutable(src, dest string) error {
 		os.Remove(tmpName)
 		return err
 	}
-	if err := os.Rename(tmpName, dest); err != nil {
+	if err := replacePlacedExecutable(tmpName, dest, os.Rename, os.Remove); err != nil {
 		os.Remove(tmpName)
 		return err
 	}
 	return nil
+}
+
+func replacePlacedExecutable(
+	tmpName, dest string,
+	rename func(string, string) error,
+	remove func(string) error,
+) error {
+	firstErr := rename(tmpName, dest)
+	if firstErr == nil {
+		return nil
+	}
+	if _, err := os.Stat(dest); err != nil {
+		return firstErr
+	}
+	backup := tmpName + ".previous"
+	if err := rename(dest, backup); err != nil {
+		return errors.Join(firstErr, err)
+	}
+	if err := rename(tmpName, dest); err != nil {
+		if restoreErr := rename(backup, dest); restoreErr != nil {
+			return errors.Join(err, restoreErr)
+		}
+		return err
+	}
+	return remove(backup)
 }
 
 func sameFile(left, right string) (bool, error) {

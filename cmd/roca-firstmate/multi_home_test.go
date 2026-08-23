@@ -215,6 +215,25 @@ func TestWatchTwoHomesTagsTouchedFiles(t *testing.T) {
 		<-done
 		t.Fatalf("watch did not start stdout %s stderr %s", out.String(), errBuf.String())
 	}
+	var readiness struct {
+		Backend string `json:"backend"`
+		Homes   []struct {
+			HomeID  string `json:"home_id"`
+			Scanned int    `json:"scanned"`
+		} `json:"homes"`
+	}
+	if err := json.NewDecoder(strings.NewReader(out.String())).Decode(&readiness); err != nil {
+		cancel()
+		<-done
+		t.Fatalf("watch readiness: %v stdout %s", err, out.String())
+	}
+	if readiness.Backend == "" || len(readiness.Homes) != 2 ||
+		readiness.Homes[0].HomeID != "northwind-harbor" || readiness.Homes[0].Scanned == 0 ||
+		readiness.Homes[1].HomeID != "skiff-secondmate" || readiness.Homes[1].Scanned == 0 {
+		cancel()
+		<-done
+		t.Fatalf("watch readiness=%+v stdout %s", readiness, out.String())
+	}
 
 	if err := os.WriteFile(filepath.Join(harbor, "data", "captain.md"), []byte("# Harbor touch\n"), 0o600); err != nil {
 		t.Fatal(err)
