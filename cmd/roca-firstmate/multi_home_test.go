@@ -199,8 +199,25 @@ func TestWatchTwoHomesTagsTouchedFiles(t *testing.T) {
 		}, nil, out, errBuf)
 	}()
 	deadline := time.Now().Add(8 * time.Second)
+	var readiness struct {
+		Status  string `json:"status"`
+		Backend string `json:"backend"`
+		Homes   []struct {
+			HomeID  string `json:"home_id"`
+			Scanned int    `json:"scanned"`
+		} `json:"homes"`
+	}
+	ready := false
 	for time.Now().Before(deadline) {
-		if strings.Contains(out.String(), `"status":"watching"`) {
+		for _, line := range strings.Split(strings.TrimSpace(out.String()), "\n") {
+			var candidate = readiness
+			if json.Unmarshal([]byte(line), &candidate) == nil && candidate.Status == "watching" && len(candidate.Homes) == 2 {
+				readiness = candidate
+				ready = true
+				break
+			}
+		}
+		if ready {
 			break
 		}
 		if strings.Contains(out.String(), `"error"`) || strings.Contains(errBuf.String(), "error:") {
@@ -210,22 +227,10 @@ func TestWatchTwoHomesTagsTouchedFiles(t *testing.T) {
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
-	if !strings.Contains(out.String(), `"status":"watching"`) {
+	if !ready {
 		cancel()
 		<-done
-		t.Fatalf("watch did not start stdout %s stderr %s", out.String(), errBuf.String())
-	}
-	var readiness struct {
-		Backend string `json:"backend"`
-		Homes   []struct {
-			HomeID  string `json:"home_id"`
-			Scanned int    `json:"scanned"`
-		} `json:"homes"`
-	}
-	if err := json.NewDecoder(strings.NewReader(out.String())).Decode(&readiness); err != nil {
-		cancel()
-		<-done
-		t.Fatalf("watch readiness: %v stdout %s", err, out.String())
+		t.Fatalf("watch did not report both homes stdout %s stderr %s", out.String(), errBuf.String())
 	}
 	if readiness.Backend == "" || len(readiness.Homes) != 2 ||
 		readiness.Homes[0].HomeID != "northwind-harbor" || readiness.Homes[0].Scanned == 0 ||
