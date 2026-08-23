@@ -2,7 +2,11 @@ package schema_test
 
 import (
 	"database/sql"
+	"encoding/json"
+	"fmt"
+	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"testing"
 
@@ -237,24 +241,53 @@ func TestTelemetryTablesRemainFreeForLaterAdditiveSchema(t *testing.T) {
 	}
 }
 
-func TestShippedDatabaseMatchesSchemaSQL(t *testing.T) {
-	root := repoRoot(t)
-	shipped, err := sql.Open("sqlite", "file:"+filepath.Join(root, "firstmate.db")+"?mode=ro")
+func TestEnsureMatchesTemplateCatalog(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join(repoRoot(t), "testdata", "template-schema.json"))
 	if err != nil {
-		t.Fatalf("open shipped firstmate.db: %v", err)
+		t.Fatalf("read template catalog: %v", err)
 	}
-	t.Cleanup(func() { shipped.Close() })
+	var want map[string]any
+	if err := json.Unmarshal(raw, &want); err != nil {
+		t.Fatalf("parse template catalog: %v", err)
+	}
 
-	applied := appliedDB(t)
-	if diff := tableDiff(t, shipped, applied); diff != "" {
-		t.Fatalf("shipped firstmate.db tables differ from schema.sql:%s", diff)
+	db, err := sql.Open("sqlite", "file:"+t.TempDir()+"/ensured.db?_pragma=foreign_keys(1)")
+	if err != nil {
+		t.Fatalf("open temp db: %v", err)
 	}
-	for _, table := range tableNames(t, applied) {
-		want := columnNames(t, applied, table)
-		got := columnNames(t, shipped, table)
-		if !slices.Equal(want, got) {
-			t.Fatalf("shipped %s columns %v, schema.sql has %v", table, got, want)
-		}
+	t.Cleanup(func() { db.Close() })
+	if err := schema.Ensure(db); err != nil {
+		t.Fatalf("ensure schema: %v", err)
+	}
+	got := dumpCatalog(t, db)
+	wantJSON, err := json.Marshal(want)
+	if err != nil {
+		t.Fatalf("encode template catalog: %v", err)
+	}
+	gotJSON, err := json.Marshal(got)
+	if err != nil {
+		t.Fatalf("encode ensured catalog: %v", err)
+	}
+	var wantNorm, gotNorm any
+	if err := json.Unmarshal(wantJSON, &wantNorm); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(gotJSON, &gotNorm); err != nil {
+		t.Fatal(err)
+	}
+	if diff := catalogValueDiff(wantNorm, gotNorm); diff != "" {
+		t.Fatalf("ensured database differs from the removed template:%s", diff)
+	}
+	if err := schema.Ensure(db); err != nil {
+		t.Fatalf("idempotent ensure: %v", err)
+	}
+	repeat := dumpCatalog(t, db)
+	repeatJSON, err := json.Marshal(repeat)
+	if err != nil {
+		t.Fatalf("encode repeat catalog: %v", err)
+	}
+	if string(gotJSON) != string(repeatJSON) {
+		t.Fatalf("second ensure changed the catalog\nfirst: %s\nsecond: %s", gotJSON, repeatJSON)
 	}
 }
 
@@ -323,22 +356,84 @@ func columnNames(t *testing.T, db *sql.DB, table string) []string {
 	return names
 }
 
-func tableDiff(t *testing.T, a, b *sql.DB) string {
+func dumpCatalog(t *testing.T, db *sql.DB) map[string]any {
 	t.Helper()
-	left, right := tableNames(t, a), tableNames(t, b)
-	if slices.Equal(left, right) {
-		return ""
+	rows, err := db.Query(`SELECT type, name, tbl_name FROM sqlite_master
+		WHERE name NOT LIKE 'sqlite_%' ORDER BY type, name`)
+	if err != nil {
+		t.Fatalf("list schema objects: %v", err)
 	}
-	return "\n  shipped: " + join(left) + "\n  schema:  " + join(right)
+	defer rows.Close()
+	var objects []map[string]string
+	var tables []string
+	for rows.Next() {
+		var objectType, name, tblName string
+		if err := rows.Scan(&objectType, &name, &tblName); err != nil {
+			t.Fatalf("scan schema object: %v", err)
+		}
+		objects = append(objects, map[string]string{"type": objectType, "name": name, "tbl_name": tblName})
+		if objectType == "table" {
+			tables = append(tables, name)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("schema objects: %v", err)
+	}
+	columns := map[string]any{}
+	counts := map[string]int{}
+	for _, table := range tables {
+		info, err := db.Query(`PRAGMA table_info(` + table + `)`)
+		if err != nil {
+			t.Fatalf("pragma table_info(%s): %v", table, err)
+		}
+		var cols []map[string]any
+		for info.Next() {
+			var cid, notNull, pk int
+			var name, kind string
+			var dflt any
+			if err := info.Scan(&cid, &name, &kind, &notNull, &dflt, &pk); err != nil {
+				info.Close()
+				t.Fatalf("scan column for %s: %v", table, err)
+			}
+			cols = append(cols, map[string]any{
+				"cid": cid, "name": name, "type": kind, "notnull": notNull, "dflt": dflt, "pk": pk,
+			})
+		}
+		if err := info.Err(); err != nil {
+			info.Close()
+			t.Fatalf("columns for %s: %v", table, err)
+		}
+		info.Close()
+		columns[table] = cols
+		var count int
+		if err := db.QueryRow(`SELECT COUNT(*) FROM ` + table).Scan(&count); err != nil {
+			t.Fatalf("count %s: %v", table, err)
+		}
+		counts[table] = count
+	}
+	var pluginName string
+	var schemaVersion, indexVersion int
+	if err := db.QueryRow(`SELECT plugin_name, schema_version, index_version FROM plugin_schema WHERE singleton = 1`).
+		Scan(&pluginName, &schemaVersion, &indexVersion); err != nil {
+		t.Fatalf("plugin_schema row: %v", err)
+	}
+	return map[string]any{
+		"objects": objects,
+		"columns": columns,
+		"plugin_schema": map[string]any{
+			"plugin_name":    pluginName,
+			"schema_version": schemaVersion,
+			"index_version":  indexVersion,
+		},
+		"row_counts": counts,
+	}
 }
 
-func join(values []string) string {
-	out := ""
-	for i, value := range values {
-		if i > 0 {
-			out += ", "
-		}
-		out += value
+func catalogValueDiff(want, got any) string {
+	if reflect.DeepEqual(want, got) {
+		return ""
 	}
-	return out
+	wantJSON, _ := json.MarshalIndent(want, "", "  ")
+	gotJSON, _ := json.MarshalIndent(got, "", "  ")
+	return fmt.Sprintf("\nwant:\n%s\ngot:\n%s", wantJSON, gotJSON)
 }

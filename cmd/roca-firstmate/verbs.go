@@ -348,12 +348,6 @@ func runChart(ctx context.Context, args []string, stdout, stderr io.Writer) int 
 		usage(stderr)
 		return exitUsage
 	}
-	if _, err := os.Stat(values.dbPath); err != nil {
-		fmt.Fprintf(stdout, "error: %s\n", err)
-		fmt.Fprintf(stdout, "help[1]:\n  - %s\n",
-			chartQuote("Run `roca-firstmate chart --db <path-to-firstmate.db>` to point at a database"))
-		return exitError
-	}
 
 	db, _, err := openDatabaseWithMirrors(ctx, values.dbPath, req.Pairs, values.sourceAgent)
 	if err != nil {

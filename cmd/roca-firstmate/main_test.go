@@ -68,9 +68,13 @@ func TestRunJSONAndUsageExitCodes(t *testing.T) {
 	if code := run([]string{"nope"}, &usage, os.Stderr); code != 2 {
 		t.Fatalf("unknown command exit %d, want 2", code)
 	}
-	var missing bytes.Buffer
-	if code := run([]string{"chart", "--db", filepath.Join(t.TempDir(), "absent.db"), "--home", home, "--home-id", "northwind-harbor"}, &missing, os.Stderr); code != 1 {
-		t.Fatalf("missing db exit %d, want 1", code)
+	var created bytes.Buffer
+	absent := filepath.Join(t.TempDir(), "plugin", "absent.db")
+	if code := run([]string{"chart", "--db", absent, "--home", home, "--home-id", "northwind-harbor"}, &created, os.Stderr); code != 0 {
+		t.Fatalf("absent db create exit %d stdout %s", code, created.String())
+	}
+	if !strings.Contains(created.String(), "status: created") {
+		t.Fatalf("absent db stdout %s", created.String())
 	}
 }
 

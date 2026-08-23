@@ -436,6 +436,21 @@ func TestWatchResidentRetriesRuntimeInitialization(t *testing.T) {
 	waitExit(t, proc.done, 3*time.Second)
 }
 
+func TestWatchCreatesMissingDatabase(t *testing.T) {
+	clearHomeEnv(t)
+	path := filepath.Join(t.TempDir(), "plugin", "firstmate.db")
+	home := fabricatedHome(t, "northwind-harbor")
+	proc := startWatch(t, path, home, "northwind-harbor")
+	waitWatching(t, proc)
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("missing database was not created: %v", err)
+	}
+	if err := proc.stdin.Close(); err != nil {
+		t.Fatal(err)
+	}
+	waitExit(t, proc.done, 3*time.Second)
+}
+
 func TestWatchRejectsPermanentDatabaseConfiguration(t *testing.T) {
 	clearHomeEnv(t)
 	home := fabricatedHome(t, "northwind-harbor")
@@ -447,7 +462,6 @@ func TestWatchRejectsPermanentDatabaseConfiguration(t *testing.T) {
 		name string
 		path string
 	}{
-		{name: "missing", path: filepath.Join(t.TempDir(), "missing.db")},
 		{name: "directory", path: t.TempDir()},
 		{name: "corrupt", path: corrupt},
 	} {
@@ -597,11 +611,10 @@ func TestWatchRetriesDatabaseDisappearanceAfterPreflight(t *testing.T) {
 	t.Setenv("ROCA_FIRSTMATE_WATCH_RETRY", "50ms")
 	path := appliedDBPath(t)
 	home := fabricatedHome(t, "northwind-harbor")
-	missing := filepath.Join(t.TempDir(), "disappeared.db")
 	var calls atomic.Int64
 	openDB := func(_ context.Context, path string) (*sql.DB, error) {
 		if calls.Add(1) == 1 {
-			return openDatabase(missing)
+			return nil, &databasePathError{err: os.ErrNotExist}
 		}
 		return openDatabase(path)
 	}

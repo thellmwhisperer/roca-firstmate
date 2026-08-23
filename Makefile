@@ -7,10 +7,8 @@ lint: ## Format and vet
 	@test -z "$$(gofmt -l .)" || (echo "gofmt pending:"; gofmt -l .; exit 1)
 	go vet ./...
 
-sync-db: ## Rebuild firstmate.db from schema.sql and refresh checksums.txt
-	rm -f firstmate.db firstmate.db-journal firstmate.db-wal firstmate.db-shm
-	sqlite3 firstmate.db < schema/schema.sql
-	shasum -a 256 plugin.json firstmate.db > checksums.txt
+sync-db: ## Refresh checksums.txt for the shipped plugin.json payload
+	shasum -a 256 plugin.json > checksums.txt
 
 build: ## Nerve, chart, Scribe, and watcher (native FSEvents on macOS)
 	mkdir -p .tmp
