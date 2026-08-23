@@ -97,22 +97,22 @@ type Ingester struct {
 	sourceSurface string
 }
 
-// New validates the configured home, registers its local identity, and loads
-// the shared La Roca unchanged-pass cursor.
-func New(ctx context.Context, db *sql.DB, config Config) (*Ingester, error) {
-	if db == nil {
-		return nil, errors.New("scribe: nil database")
-	}
+func ValidateConfig(config Config) error {
+	_, err := normalizeConfig(config)
+	return err
+}
+
+func normalizeConfig(config Config) (Config, error) {
 	config.Home = strings.TrimSpace(config.Home)
 	config.HomeID = strings.TrimSpace(config.HomeID)
 	config.Label = strings.TrimSpace(config.Label)
 	config.Kind = strings.TrimSpace(config.Kind)
 	config.SourceAgent = strings.TrimSpace(config.SourceAgent)
 	if config.Home == "" {
-		return nil, errors.New("scribe: home is required")
+		return Config{}, errors.New("scribe: home is required")
 	}
 	if err := validateHomeID(config.HomeID); err != nil {
-		return nil, err
+		return Config{}, err
 	}
 	if config.Label == "" {
 		config.Label = config.HomeID
@@ -121,13 +121,27 @@ func New(ctx context.Context, db *sql.DB, config Config) (*Ingester, error) {
 		config.Kind = "primary"
 	}
 	if config.Kind != "primary" && config.Kind != "secondmate" {
-		return nil, fmt.Errorf("scribe: home kind %q must be primary or secondmate", config.Kind)
+		return Config{}, fmt.Errorf("scribe: home kind %q must be primary or secondmate", config.Kind)
 	}
 	if config.SourceAgent == "" {
 		config.SourceAgent = "firstmate"
 	}
 	if config.Now == nil {
 		config.Now = time.Now
+	}
+	return config, nil
+}
+
+// New validates the configured home, registers its local identity, and loads
+// the shared La Roca unchanged-pass cursor.
+func New(ctx context.Context, db *sql.DB, config Config) (*Ingester, error) {
+	if db == nil {
+		return nil, errors.New("scribe: nil database")
+	}
+	var err error
+	config, err = normalizeConfig(config)
+	if err != nil {
+		return nil, err
 	}
 
 	home, err := filepath.Abs(config.Home)

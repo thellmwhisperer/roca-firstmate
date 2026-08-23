@@ -68,6 +68,37 @@ func TestTryAcquireSeatSingleFlightAndInherit(t *testing.T) {
 	}
 }
 
+func TestTryAcquireSeatDoesNotStealLaterFractionalExpiry(t *testing.T) {
+	db := appliedDB(t)
+	seedHome(t, db)
+	firstToken, err := nerve.NewHolderToken()
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondToken, err := nerve.NewHolderToken()
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 3, 14, 10, 0, 2, 100_000_000, time.UTC)
+	held, _, err := nerve.TryAcquireSeat(context.Background(), db, nerve.SeatConfig{
+		HomeID: "northwind-harbor", HolderToken: firstToken,
+		Destination: "machine", Now: now, Lease: 20 * time.Millisecond,
+	})
+	if err != nil || !held {
+		t.Fatalf("first acquire held=%v err=%v", held, err)
+	}
+	stolen, _, err := nerve.TryAcquireSeat(context.Background(), db, nerve.SeatConfig{
+		HomeID: "northwind-harbor", HolderToken: secondToken,
+		Destination: "machine", Now: now, Lease: time.Second,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stolen {
+		t.Fatal("later fractional lease expiry was treated as expired")
+	}
+}
+
 func TestReleaseSeatLetsTheNextHolderTakeOverImmediately(t *testing.T) {
 	db := appliedDB(t)
 	seedHome(t, db)

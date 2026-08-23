@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -135,6 +136,113 @@ func TestWatchResidentRetriesFailedIngestWithCatchUp(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitExit(t, proc.done, 3*time.Second)
+}
+
+func TestWatchResidentRetriesRuntimeInitialization(t *testing.T) {
+	clearHomeEnv(t)
+	t.Setenv("ROCA_FIRSTMATE_WATCH_RETRY", "50ms")
+	path := appliedDBPath(t)
+	home := filepath.Join(t.TempDir(), "late-home")
+	if err := os.MkdirAll(home, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	proc := startWatch(t, path, home, "late-home")
+	waitWatchLog(t, path, `"kind":"raise"`, `"kind":"crash-retry"`)
+	select {
+	case code := <-proc.done:
+		t.Fatalf("watch exited %d instead of retrying initialization", code)
+	default:
+	}
+	if err := os.MkdirAll(filepath.Join(home, "data"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(home, "data", "captain.md"), []byte("# late runtime home\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	waitWatching(t, proc)
+	waitVersion(t, path, "late-home", "captain.md", 1)
+	if err := proc.stdin.Close(); err != nil {
+		t.Fatal(err)
+	}
+	waitExit(t, proc.done, 3*time.Second)
+}
+
+func TestWatchRejectsInvalidIdentityBeforeRaise(t *testing.T) {
+	clearHomeEnv(t)
+	path := appliedDBPath(t)
+	home := fabricatedHome(t, "northwind-harbor")
+	stdout := &safeBuffer{}
+	stderr := &safeBuffer{}
+	code := run([]string{
+		"watch", "--db", path, "--home", home, "--home-id", "invalid/home",
+	}, stdout, stderr)
+	if code != exitError || !strings.Contains(stdout.String(), "invalid home-id") {
+		t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+	matches, err := filepath.Glob(filepath.Join(filepath.Dir(path), "logs", "watch-*.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(matches) != 0 {
+		t.Fatalf("invalid configuration entered retry lifecycle: %v", matches)
+	}
+}
+
+func TestWatchSubprocessSessionLifecycleAndAbruptTakeover(t *testing.T) {
+	clearHomeEnv(t)
+	binary := buildWatchCLI(t)
+	path := appliedDBPath(t)
+	home := fabricatedHome(t, "northwind-harbor")
+	captain := filepath.Join(home, "data", "captain.md")
+
+	first := startWatchChild(t, binary, path, home, "northwind-harbor")
+	waitChildWatching(t, first)
+	if err := os.WriteFile(captain, []byte("# subprocess live write\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	waitVersion(t, path, "northwind-harbor", "captain.md", 2)
+	if err := first.stdin.Close(); err != nil {
+		t.Fatal(err)
+	}
+	waitChildExit(t, first, true)
+	if first.cmd.ProcessState == nil || !first.cmd.ProcessState.Exited() {
+		t.Fatal("session-owned child remained alive after stdin closed")
+	}
+
+	if err := os.WriteFile(captain, []byte("# subprocess missed write\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(200 * time.Millisecond)
+	if got := currentVersions(t, path, "northwind-harbor", "captain.md"); got != 2 {
+		t.Fatalf("write after child exit landed version %d", got)
+	}
+
+	holder := startWatchChild(t, binary, path, home, "northwind-harbor")
+	waitChildWatching(t, holder)
+	waitVersion(t, path, "northwind-harbor", "captain.md", 3)
+	if err := os.WriteFile(captain, []byte("# subprocess resumed live write\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	waitVersion(t, path, "northwind-harbor", "captain.md", 4)
+
+	standby := startWatchChild(t, binary, path, home, "northwind-harbor")
+	time.Sleep(150 * time.Millisecond)
+	if strings.Contains(standby.out.String(), `"status":"watching"`) {
+		t.Fatal("standby activated while the holder was alive")
+	}
+	if err := holder.cmd.Process.Kill(); err != nil {
+		t.Fatal(err)
+	}
+	waitChildExit(t, holder, false)
+	waitChildWatching(t, standby)
+	if err := os.WriteFile(captain, []byte("# subprocess takeover write\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	waitVersion(t, path, "northwind-harbor", "captain.md", 5)
+	if err := standby.stdin.Close(); err != nil {
+		t.Fatal(err)
+	}
+	waitChildExit(t, standby, true)
 }
 
 func TestAttachAndFollowRejectWatchLeaseSeatID(t *testing.T) {
@@ -337,6 +445,90 @@ type watchProc struct {
 	out   *safeBuffer
 	err   *safeBuffer
 	done  chan int
+}
+
+type childWatchProc struct {
+	cmd   *exec.Cmd
+	stdin io.WriteCloser
+	out   *safeBuffer
+	err   *safeBuffer
+	done  chan error
+}
+
+func buildWatchCLI(t *testing.T) string {
+	t.Helper()
+	binary := filepath.Join(t.TempDir(), placedExecutableName())
+	cmd := exec.Command("go", "build", "-o", binary, ".")
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd.Dir = cwd
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("build watch CLI: %v\n%s", err, output)
+	}
+	return binary
+}
+
+func startWatchChild(t *testing.T, binary, dbPath, home, homeID string) *childWatchProc {
+	t.Helper()
+	proc := &childWatchProc{out: &safeBuffer{}, err: &safeBuffer{}, done: make(chan error, 1)}
+	proc.cmd = exec.Command(binary,
+		"watch", "--db", dbPath, "--json", "--poll-interval", "20ms",
+		"--home", home, "--home-id", homeID,
+	)
+	proc.cmd.Env = append(os.Environ(),
+		"ROCA_FIRSTMATE_WATCH_LEASE=500ms",
+		"ROCA_FIRSTMATE_WATCH_RETRY=50ms",
+	)
+	proc.cmd.Stdout = proc.out
+	proc.cmd.Stderr = proc.err
+	stdin, err := proc.cmd.StdinPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	proc.stdin = stdin
+	if err := proc.cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	go func() { proc.done <- proc.cmd.Wait() }()
+	t.Cleanup(func() {
+		_ = proc.stdin.Close()
+		_ = proc.cmd.Process.Kill()
+	})
+	return proc
+}
+
+func waitChildWatching(t *testing.T, proc *childWatchProc) {
+	t.Helper()
+	deadline := time.Now().Add(8 * time.Second)
+	for time.Now().Before(deadline) {
+		if strings.Contains(proc.out.String(), `"status":"watching"`) {
+			return
+		}
+		select {
+		case err := <-proc.done:
+			t.Fatalf("watch child exited before activation: %v stdout=%q stderr=%q", err, proc.out.String(), proc.err.String())
+		default:
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatalf("watch child did not activate stdout=%q stderr=%q", proc.out.String(), proc.err.String())
+}
+
+func waitChildExit(t *testing.T, proc *childWatchProc, success bool) {
+	t.Helper()
+	select {
+	case err := <-proc.done:
+		if success && err != nil {
+			t.Fatalf("watch child exit: %v stdout=%q stderr=%q", err, proc.out.String(), proc.err.String())
+		}
+		if !success && err == nil {
+			t.Fatal("abruptly killed watch child exited successfully")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("watch child did not exit")
+	}
 }
 
 func startWatch(t *testing.T, dbPath, home, homeID string) *watchProc {
