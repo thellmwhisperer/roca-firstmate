@@ -158,6 +158,14 @@ func runScribe(ctx context.Context, args []string, stdin io.Reader, stdout, stde
 }
 
 func openDatabase(path string) (*sql.DB, error) {
+	return openDatabaseContext(context.Background(), path, 5*time.Second)
+}
+
+func openWatchDatabase(ctx context.Context, path string) (*sql.DB, error) {
+	return openDatabaseContext(ctx, path, defaultWatchShutdownTimeout)
+}
+
+func openDatabaseContext(ctx context.Context, path string, busyTimeout time.Duration) (*sql.DB, error) {
 	if err := validateDatabasePath(path); err != nil {
 		return nil, err
 	}
@@ -166,15 +174,17 @@ func openDatabase(path string) (*sql.DB, error) {
 		return nil, fmt.Errorf("resolve firstmate.db: %w", err)
 	}
 	location := (&url.URL{Scheme: "file", Path: filepath.ToSlash(abs)}).String()
-	db, err := sql.Open("sqlite", location+"?mode=rw&_pragma=foreign_keys(1)&_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)&_txlock=immediate")
+	busyMillis := max(1, busyTimeout.Milliseconds())
+	dsn := fmt.Sprintf("%s?mode=rw&_pragma=foreign_keys(1)&_pragma=journal_mode(WAL)&_pragma=busy_timeout(%d)&_txlock=immediate", location, busyMillis)
+	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("open firstmate.db: %w", err)
 	}
-	if err := db.Ping(); err != nil {
+	if err := db.PingContext(ctx); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("open firstmate.db: %w", err)
 	}
-	if err := schema.Migrate(db); err != nil {
+	if err := schema.MigrateContext(ctx, db); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("open firstmate.db: %w", err)
 	}

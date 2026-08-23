@@ -4,6 +4,7 @@
 package schema
 
 import (
+	"context"
 	"database/sql"
 	_ "embed"
 	"fmt"
@@ -28,7 +29,11 @@ func Apply(db *sql.DB) error {
 
 // Migrate upgrades an existing plugin-owned database before it is used.
 func Migrate(db *sql.DB) error {
-	tx, err := db.Begin()
+	return MigrateContext(context.Background(), db)
+}
+
+func MigrateContext(ctx context.Context, db *sql.DB) error {
+	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin schema migration: %w", err)
 	}
@@ -36,7 +41,7 @@ func Migrate(db *sql.DB) error {
 
 	var name string
 	var version int
-	if err := tx.QueryRow(`SELECT plugin_name, schema_version FROM plugin_schema WHERE singleton = 1`).Scan(&name, &version); err != nil {
+	if err := tx.QueryRowContext(ctx, `SELECT plugin_name, schema_version FROM plugin_schema WHERE singleton = 1`).Scan(&name, &version); err != nil {
 		return fmt.Errorf("read plugin schema: %w", err)
 	}
 	if name != "roca-firstmate" {
@@ -45,12 +50,12 @@ func Migrate(db *sql.DB) error {
 	for version < 3 {
 		switch version {
 		case 1:
-			if _, err := tx.Exec(migrationV1ToV2SQL); err != nil {
+			if _, err := tx.ExecContext(ctx, migrationV1ToV2SQL); err != nil {
 				return fmt.Errorf("migrate schema v1 to v2: %w", err)
 			}
 			version = 2
 		case 2:
-			if _, err := tx.Exec(migrationV2ToV3SQL); err != nil {
+			if _, err := tx.ExecContext(ctx, migrationV2ToV3SQL); err != nil {
 				return fmt.Errorf("migrate schema v2 to v3: %w", err)
 			}
 			version = 3
