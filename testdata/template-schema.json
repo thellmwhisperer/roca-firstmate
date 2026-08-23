@@ -1,0 +1,935 @@
+{
+  "columns": {
+    "archive_versions": [
+      {
+        "cid": 0,
+        "dflt": null,
+        "name": "id",
+        "notnull": 0,
+        "pk": 1,
+        "type": "INTEGER"
+      },
+      {
+        "cid": 1,
+        "dflt": null,
+        "name": "home_id",
+        "notnull": 1,
+        "pk": 0,
+        "type": "TEXT"
+      },
+      {
+        "cid": 2,
+        "dflt": null,
+        "name": "relative_path",
+        "notnull": 1,
+        "pk": 0,
+        "type": "TEXT"
+      },
+      {
+        "cid": 3,
+        "dflt": null,
+        "name": "document_kind",
+        "notnull": 1,
+        "pk": 0,
+        "type": "TEXT"
+      },
+      {
+        "cid": 4,
+        "dflt": null,
+        "name": "version",
+        "notnull": 1,
+        "pk": 0,
+        "type": "INTEGER"
+      },
+      {
+        "cid": 5,
+        "dflt": null,
+        "name": "is_current",
+        "notnull": 1,
+        "pk": 0,
+        "type": "INTEGER"
+      },
+      {
+        "cid": 6,
+        "dflt": null,
+        "name": "content",
+        "notnull": 1,
+        "pk": 0,
+        "type": "TEXT"
+      },
+      {
+        "cid": 7,
+        "dflt": null,
+        "name": "content_sha256",
+        "notnull": 1,
+        "pk": 0,
+        "type": "TEXT"
+      },
+      {
+        "cid": 8,
+        "dflt": null,
+        "name": "observed_at",
+        "notnull": 1,
+        "pk": 0,
+        "type": "TEXT"
+      },
+      {
+        "cid": 9,
+        "dflt": null,
+        "name": "source_mtime",
+        "notnull": 0,
+        "pk": 0,
+        "type": "TEXT"
+      }
+    ],
+    "chart_cache": [
+      {
+        "cid": 0,
+        "dflt": null,
+        "name": "singleton",
+        "notnull": 0,
+        "pk": 1,
+        "type": "INTEGER"
+      },
+      {
+        "cid": 1,
+        "dflt": null,
+        "name": "watermark",
+        "notnull": 1,
+        "pk": 0,
+        "type": "TEXT"
+      },
+      {
+        "cid": 2,
+        "dflt": null,
+        "name": "body",
+        "notnull": 1,
+        "pk": 0,
+        "type": "TEXT"
+      },
+      {
+        "cid": 3,
+        "dflt": null,
+        "name": "generated_at",
+        "notnull": 1,
+        "pk": 0,
+        "type": "TEXT"
+      }
+    ],
+    "homes": [
+      {
+        "cid": 0,
+        "dflt": null,
+        "name": "home_id",
+        "notnull": 0,
+        "pk": 1,
+        "type": "TEXT"
+      },
+      {
+        "cid": 1,
+        "dflt": null,
+        "name": "label",
+        "notnull": 1,
+        "pk": 0,
+        "type": "TEXT"
+      },
+      {
+        "cid": 2,
+        "dflt": null,
+        "name": "kind",
+        "notnull": 1,
+        "pk": 0,
+        "type": "TEXT"
+      },
+      {
+        "cid": 3,
+        "dflt": null,
+        "name": "recorded_at",
+        "notnull": 1,
+        "pk": 0,
+        "type": "TEXT"
+      }
+    ],
+    "ingest_file_state": [
+      {
+        "cid": 0,
+        "dflt": null,
+        "name": "path",
+        "notnull": 1,
+        "pk": 1,
+        "type": "TEXT"
+      },
+      {
+        "cid": 1,
+        "dflt": null,
+        "name": "source_kind",
+        "notnull": 1,
+        "pk": 0,
+        "type": "TEXT"
+      },
+      {
+        "cid": 2,
+        "dflt": null,
+        "name": "source_agent",
+        "notnull": 0,
+        "pk": 0,
+        "type": "TEXT"
+      },
+      {
+        "cid": 3,
+        "dflt": null,
+        "name": "project",
+        "notnull": 0,
+        "pk": 0,
+        "type": "TEXT"
+      },
+      {
+        "cid": 4,
+        "dflt": null,
+        "name": "fingerprint",
+        "notnull": 0,
+        "pk": 0,
+        "type": "TEXT"
+      },
+      {
+        "cid": 5,
+        "dflt": null,
+        "name": "last_synced_at",
+        "notnull": 0,
+        "pk": 0,
+        "type": "TEXT"
+      },
+      {
+        "cid": 6,
+        "dflt": null,
+        "name": "last_error",
+        "notnull": 0,
+        "pk": 0,
+        "type": "TEXT"
+      },
+      {
+        "cid": 7,
+        "dflt": "'{}'",
+        "name": "metadata",
+        "notnull": 1,
+        "pk": 0,
+        "type": "TEXT"
+      }
+    ],
+    "operational_doc_versions": [
+      {
+        "cid": 0,
+        "dflt": null,
+        "name": "id",
+        "notnull": 0,
+        "pk": 1,
+        "type": "INTEGER"
+      },
+      {
+        "cid": 1,
+        "dflt": null,
+        "name": "home_id",
+        "notnull": 1,
+        "pk": 0,
+        "type": "TEXT"
+      },
+      {
+        "cid": 2,
+        "dflt": null,
+        "name": "relative_path",
+        "notnull": 1,
+        "pk": 0,
+        "type": "TEXT"
+      },
+      {
+        "cid": 3,
+        "dflt": null,
+        "name": "document_kind",
+        "notnull": 1,
+        "pk": 0,
+        "type": "TEXT"
+      },
+      {
+        "cid": 4,
+        "dflt": null,
+        "name": "version",
+        "notnull": 1,
+        "pk": 0,
+        "type": "INTEGER"
+      },
+      {
+        "cid": 5,
+        "dflt": null,
+        "name": "is_current",
+        "notnull": 1,
+        "pk": 0,
+        "type": "INTEGER"
+      },
+      {
+        "cid": 6,
+        "dflt": null,
+        "name": "content",
+        "notnull": 1,
+        "pk": 0,
+        "type": "TEXT"
+      },
+      {
+        "cid": 7,
+        "dflt": null,
+        "name": "content_sha256",
+        "notnull": 1,
+        "pk": 0,
+        "type": "TEXT"
+      },
+      {
+        "cid": 8,
+        "dflt": null,
+        "name": "observed_at",
+        "notnull": 1,
+        "pk": 0,
+        "type": "TEXT"
+      },
+      {
+        "cid": 9,
+        "dflt": null,
+        "name": "source_mtime",
+        "notnull": 0,
+        "pk": 0,
+        "type": "TEXT"
+      }
+    ],
+    "plugin_schema": [
+      {
+        "cid": 0,
+        "dflt": null,
+        "name": "singleton",
+        "notnull": 0,
+        "pk": 1,
+        "type": "INTEGER"
+      },
+      {
+        "cid": 1,
+        "dflt": null,
+        "name": "plugin_name",
+        "notnull": 1,
+        "pk": 0,
+        "type": "TEXT"
+      },
+      {
+        "cid": 2,
+        "dflt": null,
+        "name": "schema_version",
+        "notnull": 1,
+        "pk": 0,
+        "type": "INTEGER"
+      },
+      {
+        "cid": 3,
+        "dflt": null,
+        "name": "index_version",
+        "notnull": 1,
+        "pk": 0,
+        "type": "INTEGER"
+      }
+    ],
+    "seats": [
+      {
+        "cid": 0,
+        "dflt": null,
+        "name": "seat_id",
+        "notnull": 0,
+        "pk": 1,
+        "type": "TEXT"
+      },
+      {
+        "cid": 1,
+        "dflt": null,
+        "name": "home_id",
+        "notnull": 1,
+        "pk": 0,
+        "type": "TEXT"
+      },
+      {
+        "cid": 2,
+        "dflt": null,
+        "name": "workspace_fingerprint",
+        "notnull": 1,
+        "pk": 0,
+        "type": "TEXT"
+      },
+      {
+        "cid": 3,
+        "dflt": null,
+        "name": "label",
+        "notnull": 1,
+        "pk": 0,
+        "type": "TEXT"
+      },
+      {
+        "cid": 4,
+        "dflt": null,
+        "name": "destination",
+        "notnull": 1,
+        "pk": 0,
+        "type": "TEXT"
+      },
+      {
+        "cid": 5,
+        "dflt": null,
+        "name": "attached_at",
+        "notnull": 1,
+        "pk": 0,
+        "type": "TEXT"
+      },
+      {
+        "cid": 6,
+        "dflt": null,
+        "name": "last_seen_at",
+        "notnull": 1,
+        "pk": 0,
+        "type": "TEXT"
+      },
+      {
+        "cid": 7,
+        "dflt": null,
+        "name": "lease_until",
+        "notnull": 1,
+        "pk": 0,
+        "type": "TEXT"
+      },
+      {
+        "cid": 8,
+        "dflt": "0",
+        "name": "silence_generation",
+        "notnull": 1,
+        "pk": 0,
+        "type": "INTEGER"
+      }
+    ],
+    "task_artifact_versions": [
+      {
+        "cid": 0,
+        "dflt": null,
+        "name": "id",
+        "notnull": 0,
+        "pk": 1,
+        "type": "INTEGER"
+      },
+      {
+        "cid": 1,
+        "dflt": null,
+        "name": "home_id",
+        "notnull": 1,
+        "pk": 0,
+        "type": "TEXT"
+      },
+      {
+        "cid": 2,
+        "dflt": null,
+        "name": "task_id",
+        "notnull": 1,
+        "pk": 0,
+        "type": "TEXT"
+      },
+      {
+        "cid": 3,
+        "dflt": null,
+        "name": "relative_path",
+        "notnull": 1,
+        "pk": 0,
+        "type": "TEXT"
+      },
+      {
+        "cid": 4,
+        "dflt": null,
+        "name": "document_kind",
+        "notnull": 1,
+        "pk": 0,
+        "type": "TEXT"
+      },
+      {
+        "cid": 5,
+        "dflt": null,
+        "name": "version",
+        "notnull": 1,
+        "pk": 0,
+        "type": "INTEGER"
+      },
+      {
+        "cid": 6,
+        "dflt": null,
+        "name": "is_current",
+        "notnull": 1,
+        "pk": 0,
+        "type": "INTEGER"
+      },
+      {
+        "cid": 7,
+        "dflt": null,
+        "name": "content",
+        "notnull": 1,
+        "pk": 0,
+        "type": "TEXT"
+      },
+      {
+        "cid": 8,
+        "dflt": null,
+        "name": "content_sha256",
+        "notnull": 1,
+        "pk": 0,
+        "type": "TEXT"
+      },
+      {
+        "cid": 9,
+        "dflt": null,
+        "name": "observed_at",
+        "notnull": 1,
+        "pk": 0,
+        "type": "TEXT"
+      },
+      {
+        "cid": 10,
+        "dflt": null,
+        "name": "source_mtime",
+        "notnull": 0,
+        "pk": 0,
+        "type": "TEXT"
+      }
+    ],
+    "task_state_versions": [
+      {
+        "cid": 0,
+        "dflt": null,
+        "name": "id",
+        "notnull": 0,
+        "pk": 1,
+        "type": "INTEGER"
+      },
+      {
+        "cid": 1,
+        "dflt": null,
+        "name": "home_id",
+        "notnull": 1,
+        "pk": 0,
+        "type": "TEXT"
+      },
+      {
+        "cid": 2,
+        "dflt": null,
+        "name": "relative_path",
+        "notnull": 1,
+        "pk": 0,
+        "type": "TEXT"
+      },
+      {
+        "cid": 3,
+        "dflt": null,
+        "name": "document_kind",
+        "notnull": 1,
+        "pk": 0,
+        "type": "TEXT"
+      },
+      {
+        "cid": 4,
+        "dflt": null,
+        "name": "version",
+        "notnull": 1,
+        "pk": 0,
+        "type": "INTEGER"
+      },
+      {
+        "cid": 5,
+        "dflt": null,
+        "name": "is_current",
+        "notnull": 1,
+        "pk": 0,
+        "type": "INTEGER"
+      },
+      {
+        "cid": 6,
+        "dflt": null,
+        "name": "content",
+        "notnull": 1,
+        "pk": 0,
+        "type": "TEXT"
+      },
+      {
+        "cid": 7,
+        "dflt": null,
+        "name": "content_sha256",
+        "notnull": 1,
+        "pk": 0,
+        "type": "TEXT"
+      },
+      {
+        "cid": 8,
+        "dflt": null,
+        "name": "observed_at",
+        "notnull": 1,
+        "pk": 0,
+        "type": "TEXT"
+      },
+      {
+        "cid": 9,
+        "dflt": null,
+        "name": "source_mtime",
+        "notnull": 0,
+        "pk": 0,
+        "type": "TEXT"
+      }
+    ],
+    "tasks": [
+      {
+        "cid": 0,
+        "dflt": null,
+        "name": "home_id",
+        "notnull": 1,
+        "pk": 1,
+        "type": "TEXT"
+      },
+      {
+        "cid": 1,
+        "dflt": null,
+        "name": "task_id",
+        "notnull": 1,
+        "pk": 2,
+        "type": "TEXT"
+      }
+    ],
+    "wakeups": [
+      {
+        "cid": 0,
+        "dflt": null,
+        "name": "id",
+        "notnull": 0,
+        "pk": 1,
+        "type": "INTEGER"
+      },
+      {
+        "cid": 1,
+        "dflt": null,
+        "name": "destination",
+        "notnull": 1,
+        "pk": 0,
+        "type": "TEXT"
+      },
+      {
+        "cid": 2,
+        "dflt": "0",
+        "name": "handled",
+        "notnull": 1,
+        "pk": 0,
+        "type": "INTEGER"
+      },
+      {
+        "cid": 3,
+        "dflt": null,
+        "name": "generation",
+        "notnull": 1,
+        "pk": 0,
+        "type": "INTEGER"
+      },
+      {
+        "cid": 4,
+        "dflt": null,
+        "name": "handled_generation",
+        "notnull": 0,
+        "pk": 0,
+        "type": "INTEGER"
+      },
+      {
+        "cid": 5,
+        "dflt": "''",
+        "name": "kind",
+        "notnull": 1,
+        "pk": 0,
+        "type": "TEXT"
+      },
+      {
+        "cid": 6,
+        "dflt": null,
+        "name": "home_id",
+        "notnull": 0,
+        "pk": 0,
+        "type": "TEXT"
+      },
+      {
+        "cid": 7,
+        "dflt": null,
+        "name": "task_id",
+        "notnull": 0,
+        "pk": 0,
+        "type": "TEXT"
+      },
+      {
+        "cid": 8,
+        "dflt": "''",
+        "name": "payload",
+        "notnull": 1,
+        "pk": 0,
+        "type": "TEXT"
+      },
+      {
+        "cid": 9,
+        "dflt": null,
+        "name": "created_at",
+        "notnull": 1,
+        "pk": 0,
+        "type": "TEXT"
+      }
+    ],
+    "working_set_versions": [
+      {
+        "cid": 0,
+        "dflt": null,
+        "name": "id",
+        "notnull": 0,
+        "pk": 1,
+        "type": "INTEGER"
+      },
+      {
+        "cid": 1,
+        "dflt": null,
+        "name": "home_id",
+        "notnull": 1,
+        "pk": 0,
+        "type": "TEXT"
+      },
+      {
+        "cid": 2,
+        "dflt": null,
+        "name": "relative_path",
+        "notnull": 1,
+        "pk": 0,
+        "type": "TEXT"
+      },
+      {
+        "cid": 3,
+        "dflt": null,
+        "name": "document_kind",
+        "notnull": 1,
+        "pk": 0,
+        "type": "TEXT"
+      },
+      {
+        "cid": 4,
+        "dflt": null,
+        "name": "version",
+        "notnull": 1,
+        "pk": 0,
+        "type": "INTEGER"
+      },
+      {
+        "cid": 5,
+        "dflt": null,
+        "name": "is_current",
+        "notnull": 1,
+        "pk": 0,
+        "type": "INTEGER"
+      },
+      {
+        "cid": 6,
+        "dflt": null,
+        "name": "content",
+        "notnull": 1,
+        "pk": 0,
+        "type": "TEXT"
+      },
+      {
+        "cid": 7,
+        "dflt": null,
+        "name": "content_sha256",
+        "notnull": 1,
+        "pk": 0,
+        "type": "TEXT"
+      },
+      {
+        "cid": 8,
+        "dflt": null,
+        "name": "observed_at",
+        "notnull": 1,
+        "pk": 0,
+        "type": "TEXT"
+      },
+      {
+        "cid": 9,
+        "dflt": null,
+        "name": "source_mtime",
+        "notnull": 0,
+        "pk": 0,
+        "type": "TEXT"
+      }
+    ]
+  },
+  "objects": [
+    {
+      "name": "archive_current",
+      "tbl_name": "archive_versions",
+      "type": "index"
+    },
+    {
+      "name": "ingest_file_state_project",
+      "tbl_name": "ingest_file_state",
+      "type": "index"
+    },
+    {
+      "name": "ingest_file_state_source_agent",
+      "tbl_name": "ingest_file_state",
+      "type": "index"
+    },
+    {
+      "name": "operational_doc_current",
+      "tbl_name": "operational_doc_versions",
+      "type": "index"
+    },
+    {
+      "name": "seats_destination_lease",
+      "tbl_name": "seats",
+      "type": "index"
+    },
+    {
+      "name": "task_artifact_current",
+      "tbl_name": "task_artifact_versions",
+      "type": "index"
+    },
+    {
+      "name": "task_artifact_task",
+      "tbl_name": "task_artifact_versions",
+      "type": "index"
+    },
+    {
+      "name": "task_state_current",
+      "tbl_name": "task_state_versions",
+      "type": "index"
+    },
+    {
+      "name": "wakeups_generation",
+      "tbl_name": "wakeups",
+      "type": "index"
+    },
+    {
+      "name": "wakeups_unhandled",
+      "tbl_name": "wakeups",
+      "type": "index"
+    },
+    {
+      "name": "working_set_current",
+      "tbl_name": "working_set_versions",
+      "type": "index"
+    },
+    {
+      "name": "archive_versions",
+      "tbl_name": "archive_versions",
+      "type": "table"
+    },
+    {
+      "name": "chart_cache",
+      "tbl_name": "chart_cache",
+      "type": "table"
+    },
+    {
+      "name": "homes",
+      "tbl_name": "homes",
+      "type": "table"
+    },
+    {
+      "name": "ingest_file_state",
+      "tbl_name": "ingest_file_state",
+      "type": "table"
+    },
+    {
+      "name": "operational_doc_versions",
+      "tbl_name": "operational_doc_versions",
+      "type": "table"
+    },
+    {
+      "name": "plugin_schema",
+      "tbl_name": "plugin_schema",
+      "type": "table"
+    },
+    {
+      "name": "seats",
+      "tbl_name": "seats",
+      "type": "table"
+    },
+    {
+      "name": "task_artifact_versions",
+      "tbl_name": "task_artifact_versions",
+      "type": "table"
+    },
+    {
+      "name": "task_state_versions",
+      "tbl_name": "task_state_versions",
+      "type": "table"
+    },
+    {
+      "name": "tasks",
+      "tbl_name": "tasks",
+      "type": "table"
+    },
+    {
+      "name": "wakeups",
+      "tbl_name": "wakeups",
+      "type": "table"
+    },
+    {
+      "name": "working_set_versions",
+      "tbl_name": "working_set_versions",
+      "type": "table"
+    },
+    {
+      "name": "archive_version_wakeup",
+      "tbl_name": "archive_versions",
+      "type": "trigger"
+    },
+    {
+      "name": "operational_doc_version_wakeup",
+      "tbl_name": "operational_doc_versions",
+      "type": "trigger"
+    },
+    {
+      "name": "task_artifact_path_insert",
+      "tbl_name": "task_artifact_versions",
+      "type": "trigger"
+    },
+    {
+      "name": "task_artifact_path_update",
+      "tbl_name": "task_artifact_versions",
+      "type": "trigger"
+    },
+    {
+      "name": "task_artifact_version_wakeup",
+      "tbl_name": "task_artifact_versions",
+      "type": "trigger"
+    },
+    {
+      "name": "task_state_version_wakeup",
+      "tbl_name": "task_state_versions",
+      "type": "trigger"
+    },
+    {
+      "name": "working_set_version_wakeup",
+      "tbl_name": "working_set_versions",
+      "type": "trigger"
+    }
+  ],
+  "plugin_schema": {
+    "index_version": 1,
+    "plugin_name": "roca-firstmate",
+    "schema_version": 3
+  },
+  "row_counts": {
+    "archive_versions": 0,
+    "chart_cache": 0,
+    "homes": 0,
+    "ingest_file_state": 0,
+    "operational_doc_versions": 0,
+    "plugin_schema": 1,
+    "seats": 0,
+    "task_artifact_versions": 0,
+    "task_state_versions": 0,
+    "tasks": 0,
+    "wakeups": 0,
+    "working_set_versions": 0
+  }
+}

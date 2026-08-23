@@ -3,10 +3,10 @@ package schema_test
 import (
 	"bytes"
 	"crypto/sha256"
-	"database/sql"
 	"encoding/hex"
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -14,7 +14,6 @@ import (
 	"testing"
 
 	"github.com/thellmwhisperer/roca-firstmate/schema"
-	_ "modernc.org/sqlite"
 )
 
 // Hidden La Roca bookkeeping tables may exist in firstmate.db without a
@@ -204,7 +203,7 @@ func TestChecksumsCoverExactlyTheInstallPayload(t *testing.T) {
 		}
 		want[fields[1]] = strings.ToLower(fields[0])
 	}
-	required := []string{"plugin.json", "firstmate.db"}
+	required := []string{"plugin.json"}
 	slices.Sort(required)
 	var declared []string
 	for name := range want {
@@ -225,30 +224,18 @@ func TestChecksumsCoverExactlyTheInstallPayload(t *testing.T) {
 	}
 }
 
-func TestShippedDatabaseHasNoMirroredRows(t *testing.T) {
+func TestRepositoryDoesNotCommitDatabaseBinaries(t *testing.T) {
 	root := repoRoot(t)
-	db, err := sql.Open("sqlite", "file:"+filepath.Join(root, "firstmate.db")+"?mode=ro")
+	listed, err := exec.Command("git", "-C", root, "ls-files", "--", "*.db").Output()
 	if err != nil {
-		t.Fatalf("open shipped firstmate.db: %v", err)
+		t.Fatalf("git ls-files: %v", err)
 	}
-	t.Cleanup(func() { db.Close() })
-	for _, table := range []string{"homes", "tasks"} {
-		var count int
-		if err := db.QueryRow(`SELECT COUNT(*) FROM ` + table).Scan(&count); err != nil {
-			t.Fatalf("count %s: %v", table, err)
-		}
-		if count != 0 {
-			t.Fatalf("shipped %s has %d rows; the public package must ship an empty schema", table, count)
-		}
+	if names := strings.TrimSpace(string(listed)); names != "" {
+		t.Fatalf("committed database files:\n%s", names)
 	}
-	for _, table := range familyTables {
-		var count int
-		if err := db.QueryRow(`SELECT COUNT(*) FROM ` + table).Scan(&count); err != nil {
-			t.Fatalf("count %s: %v", table, err)
-		}
-		if count != 0 {
-			t.Fatalf("shipped %s has %d rows; mirrored data stays local", table, count)
-		}
+	ignore := exec.Command("git", "-C", root, "check-ignore", "-q", "firstmate.db")
+	if err := ignore.Run(); err != nil {
+		t.Fatal("firstmate.db is not gitignored")
 	}
 }
 

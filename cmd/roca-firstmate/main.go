@@ -173,9 +173,12 @@ func openDatabaseContext(ctx context.Context, path string, busyTimeout time.Dura
 	if err != nil {
 		return nil, fmt.Errorf("resolve firstmate.db: %w", err)
 	}
+	if err := os.MkdirAll(filepath.Dir(abs), 0o700); err != nil {
+		return nil, fmt.Errorf("create firstmate.db directory: %w", err)
+	}
 	location := (&url.URL{Scheme: "file", Path: filepath.ToSlash(abs)}).String()
 	busyMillis := max(1, busyTimeout.Milliseconds())
-	dsn := fmt.Sprintf("%s?mode=rw&_pragma=foreign_keys(1)&_pragma=journal_mode(WAL)&_pragma=busy_timeout(%d)&_txlock=immediate", location, busyMillis)
+	dsn := fmt.Sprintf("%s?mode=rwc&_pragma=foreign_keys(1)&_pragma=journal_mode(WAL)&_pragma=busy_timeout(%d)&_txlock=immediate", location, busyMillis)
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("open firstmate.db: %w", err)
@@ -184,7 +187,7 @@ func openDatabaseContext(ctx context.Context, path string, busyTimeout time.Dura
 		db.Close()
 		return nil, fmt.Errorf("open firstmate.db: %w", err)
 	}
-	if err := schema.MigrateContext(ctx, db); err != nil {
+	if err := schema.EnsureContext(ctx, db); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("open firstmate.db: %w", err)
 	}
@@ -194,6 +197,9 @@ func openDatabaseContext(ctx context.Context, path string, busyTimeout time.Dura
 func validateDatabasePath(path string) error {
 	info, err := os.Stat(path)
 	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
 		return &databasePathError{err: err}
 	}
 	if !info.Mode().IsRegular() {

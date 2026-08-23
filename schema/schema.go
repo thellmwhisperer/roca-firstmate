@@ -1,4 +1,4 @@
-// Package schema owns the firstmate.db DDL shipped by this plugin.
+// Package schema owns the firstmate.db DDL applied at first run.
 //
 // This package is shared by Scribe's versioned mirror and Nerve's queue state.
 package schema
@@ -7,7 +7,9 @@ import (
 	"context"
 	"database/sql"
 	_ "embed"
+	"errors"
 	"fmt"
+	"strings"
 )
 
 // SQL is the version 3 declaration. Apply replays it on an empty database.
@@ -25,6 +27,37 @@ var migrationV2ToV3SQL string
 func Apply(db *sql.DB) error {
 	_, err := db.Exec(SQL)
 	return err
+}
+
+// Ensure applies the current schema to an empty database, then migrates.
+func Ensure(db *sql.DB) error {
+	return EnsureContext(context.Background(), db)
+}
+
+// EnsureContext applies the current schema to an empty database, then migrates.
+func EnsureContext(ctx context.Context, db *sql.DB) error {
+	var name string
+	err := db.QueryRowContext(ctx, `SELECT plugin_name FROM plugin_schema WHERE singleton = 1`).Scan(&name)
+	if missingPluginSchema(err) {
+		if applyErr := Apply(db); applyErr != nil {
+			if retry := db.QueryRowContext(ctx, `SELECT plugin_name FROM plugin_schema WHERE singleton = 1`).Scan(&name); retry != nil {
+				return fmt.Errorf("apply schema: %w", applyErr)
+			}
+		}
+	} else if err != nil {
+		return fmt.Errorf("read plugin schema: %w", err)
+	}
+	return MigrateContext(ctx, db)
+}
+
+func missingPluginSchema(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, sql.ErrNoRows) {
+		return true
+	}
+	return strings.Contains(strings.ToLower(err.Error()), "no such table")
 }
 
 // Migrate upgrades an existing plugin-owned database before it is used.

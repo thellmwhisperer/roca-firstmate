@@ -1,10 +1,10 @@
 # roca-firstmate
 
-Public normative La Roca plugin example. It ships `firstmate.db` as an external federated database. The La Roca product repo stays untouched. Firstmate is mirrored, not modified.
+Public normative La Roca plugin example. It creates `firstmate.db` at first run from `schema/schema.sql`. The La Roca product repo stays untouched. Firstmate is mirrored, not modified.
 
 ## Contract
 
-- Payload the installer verifies is exactly `plugin.json` and `firstmate.db`. Source of the database is `schema/schema.sql`.
+- Payload the installer verifies is exactly `plugin.json`. First invocation creates `firstmate.db` from `schema/schema.sql` with the current `plugin_schema` marker. Never commit a `.db` file.
 - Five markdown families are versioned: every rewrite is a new row, `is_current` marks the latest file. Schema: `schema/schema.sql`.
 - `wakeups`, Scribe's insert triggers, and Nerve v1 ship now. Destinations are `captain`, `companion`, and `machine`; mobile is later. `attach` is the default foreground subscription, `follow` listens to the WAL, and ephemeral `tick` owns silence/orphan recovery. No default daemon or KeepAlive. `README.md` owns the session-owned `watch` and `place` contract. `chart_cache` holds the on-demand AXI chart and its watermark. Distiller is deleted.
 - Do not install this plugin onto a live captain La Roca. Prove the payload with `make check`.
@@ -21,7 +21,7 @@ Public normative La Roca plugin example. It ships `firstmate.db` as an external 
 
 ```sh
 make check      # gofmt, go vet, go test
-make sync-db    # rebuild firstmate.db and checksums.txt from schema.sql
+make sync-db    # refresh checksums.txt for plugin.json
 ```
 
 ## Maintaining this file
