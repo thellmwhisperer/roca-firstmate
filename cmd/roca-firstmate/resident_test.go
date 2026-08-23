@@ -188,7 +188,7 @@ func TestWatchTakeoverRefreshesCachedFingerprintState(t *testing.T) {
 	}
 	msgs := make(chan watchMsg, 16)
 	activations := make(chan watchActivation, 1)
-	if err := acquireWatchHomes(
+	if _, err := acquireWatchHomes(
 		context.Background(), db, []*leasedHome{standby}, 20*time.Millisecond,
 		time.Minute, 20*time.Millisecond, nil, msgs, activations,
 	); err != nil {
@@ -215,7 +215,7 @@ func TestWatchTakeoverRefreshesCachedFingerprintState(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer standDownWatchHome(context.Background(), db, standby, 0, nil, time.Time{})
-	if err := acquireWatchHomes(
+	if _, err := acquireWatchHomes(
 		context.Background(), db, []*leasedHome{standby}, 20*time.Millisecond,
 		time.Minute, 20*time.Millisecond, nil, msgs, activations,
 	); err != nil {
@@ -269,7 +269,7 @@ func TestWatchStandbyDoesNotMutateHomeMetadata(t *testing.T) {
 	}
 	msgs := make(chan watchMsg, 1)
 	activations := make(chan watchActivation, 1)
-	if err := acquireWatchHomes(
+	if _, err := acquireWatchHomes(
 		context.Background(), db, []*leasedHome{standby}, 20*time.Millisecond,
 		time.Minute, 20*time.Millisecond, nil, msgs, activations,
 	); err != nil {
@@ -1010,7 +1010,7 @@ func TestHeartbeatRenewsOtherHomeDuringBlockedSweepAndFencesLoss(t *testing.T) {
 
 	msgs := make(chan watchMsg, 16)
 	activations := make(chan watchActivation, len(homes))
-	if err := acquireWatchHomes(
+	if _, err := acquireWatchHomes(
 		ctx, db, homes, 10*time.Millisecond, lease, retry, nil, msgs, activations,
 	); err != nil {
 		t.Fatal(err)
@@ -1114,10 +1114,11 @@ func TestMultiHomeAcquisitionContinuesDuringBlockedSweep(t *testing.T) {
 	activations := make(chan watchActivation, len(homes))
 	acquired := make(chan error, 1)
 	go func() {
-		acquired <- acquireWatchHomes(
+		_, err := acquireWatchHomes(
 			ctx, db, homes, 10*time.Millisecond, time.Minute, 20*time.Millisecond,
 			nil, make(chan watchMsg, 16), activations,
 		)
+		acquired <- err
 	}()
 	select {
 	case err := <-acquired:
@@ -1135,6 +1136,46 @@ func TestMultiHomeAcquisitionContinuesDuringBlockedSweep(t *testing.T) {
 	activation := waitWatchActivation(t, activations)
 	if activation.err != nil || activation.summary.HomeID != "skiff-secondmate" {
 		t.Fatalf("second home activation=%+v", activation)
+	}
+}
+
+func TestAcquireErrorPreservesDueStandbyDeadline(t *testing.T) {
+	path := appliedDBPath(t)
+	db, err := sql.Open("sqlite", "file:"+path+"?_pragma=foreign_keys(1)&_pragma=busy_timeout(5000)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if _, err := db.Exec(`INSERT INTO homes (home_id, label, kind, recorded_at)
+		VALUES ('northwind-harbor', 'Northwind Harbor', 'primary', '2026-03-14T10:00:00Z')`); err != nil {
+		t.Fatal(err)
+	}
+	token, err := nerve.NewHolderToken()
+	if err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().UTC().Add(-time.Millisecond)
+	home := &leasedHome{
+		pair: homePair{ID: "northwind-harbor"}, token: token,
+		seatID: nerve.WatchSeatID("northwind-harbor"), prepared: true, standbyUntil: deadline,
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	started, err := acquireWatchHomes(
+		ctx, db, []*leasedHome{home}, 10*time.Millisecond, time.Minute, 30*time.Second,
+		nil, make(chan watchMsg, 1), make(chan watchActivation, 1),
+	)
+	if err == nil || started != 0 {
+		t.Fatalf("started=%d err=%v", started, err)
+	}
+	home.mu.Lock()
+	keptDeadline := home.standbyUntil
+	home.mu.Unlock()
+	if !keptDeadline.Equal(deadline) {
+		t.Fatalf("standby deadline=%s want %s", keptDeadline, deadline)
+	}
+	if delay := nextWatchAttempt([]*leasedHome{home}, 30*time.Second); delay > 500*time.Millisecond {
+		t.Fatalf("next acquisition delayed %s", delay)
 	}
 }
 

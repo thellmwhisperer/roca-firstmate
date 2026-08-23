@@ -40,3 +40,36 @@ func TestPlaceDefaultsToDatabaseDirectory(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestReplacePlacedExecutableWhenRenameCannotOverwrite(t *testing.T) {
+	dir := t.TempDir()
+	dest := filepath.Join(dir, "roca-firstmate")
+	tmpName := filepath.Join(dir, "replacement")
+	if err := os.WriteFile(dest, []byte("old executable"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(tmpName, []byte("new executable"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	blocked := false
+	rename := func(oldPath, newPath string) error {
+		if !blocked && oldPath == tmpName && newPath == dest {
+			blocked = true
+			return os.ErrExist
+		}
+		return os.Rename(oldPath, newPath)
+	}
+	if err := replacePlacedExecutable(tmpName, dest, rename, os.Remove); err != nil {
+		t.Fatal(err)
+	}
+	content, err := os.ReadFile(dest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(content) != "new executable" {
+		t.Fatalf("placed content=%q", content)
+	}
+	if _, err := os.Stat(tmpName + ".previous"); !os.IsNotExist(err) {
+		t.Fatalf("backup remains: %v", err)
+	}
+}

@@ -319,7 +319,13 @@ func (i *Ingester) IngestPath(ctx context.Context, path string) (Event, error) {
 		return Event{}, fmt.Errorf("scribe: fingerprint %s: %w", rel, err)
 	}
 	if incrementality.Unchanged(i.state, cursorPath, fingerprint) {
-		return event, nil
+		unchanged, err := i.persistedUnchanged(ctx, cursorPath, fingerprint)
+		if err != nil {
+			return Event{}, fmt.Errorf("scribe: validate cursor %s: %w", rel, err)
+		}
+		if unchanged {
+			return event, nil
+		}
 	}
 	content, err := os.ReadFile(abs)
 	if err != nil {
@@ -421,6 +427,21 @@ func (i *Ingester) IngestPath(ctx context.Context, path string) (Event, error) {
 	event.Inserted = true
 	event.Wakeups = wakeups
 	return event, nil
+}
+
+func (i *Ingester) persistedUnchanged(ctx context.Context, cursorPath, fingerprint string) (bool, error) {
+	var persisted, failure string
+	err := i.db.QueryRowContext(ctx, `SELECT COALESCE(fingerprint, ''), COALESCE(last_error, '')
+		FROM ingest_file_state WHERE path = ?`, cursorPath).Scan(&persisted, &failure)
+	if errors.Is(err, sql.ErrNoRows) {
+		delete(i.state, cursorPath)
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	i.state[cursorPath] = incrementality.FileState{Fingerprint: persisted, LastError: failure}
+	return failure == "" && persisted != "" && persisted == fingerprint, nil
 }
 
 func (i *Ingester) fenceCommit(ctx context.Context, tx *sql.Tx, rel string) error {
