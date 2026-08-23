@@ -20,7 +20,7 @@ import (
 
 	"github.com/thellmwhisperer/roca-firstmate/internal/scribe"
 	"github.com/thellmwhisperer/roca-firstmate/schema"
-	_ "modernc.org/sqlite"
+	"modernc.org/sqlite"
 )
 
 const (
@@ -151,7 +151,7 @@ func runScribe(ctx context.Context, args []string, stdin io.Reader, stdout, stde
 }
 
 func openDatabase(path string) (*sql.DB, error) {
-	if _, err := os.Stat(path); err != nil {
+	if err := validateDatabasePath(path); err != nil {
 		return nil, err
 	}
 	abs, err := filepath.Abs(path)
@@ -172,6 +172,33 @@ func openDatabase(path string) (*sql.DB, error) {
 		return nil, fmt.Errorf("open firstmate.db: %w", err)
 	}
 	return db, nil
+}
+
+func validateDatabasePath(path string) error {
+	info, err := os.Stat(path)
+	if err != nil {
+		return err
+	}
+	if !info.Mode().IsRegular() {
+		return fmt.Errorf("firstmate.db must be a regular file")
+	}
+	if _, err := filepath.Abs(path); err != nil {
+		return fmt.Errorf("resolve firstmate.db: %w", err)
+	}
+	return nil
+}
+
+func retryableDatabaseOpenError(err error) bool {
+	var sqliteErr *sqlite.Error
+	if !errors.As(err, &sqliteErr) {
+		return false
+	}
+	switch sqliteErr.Code() & 0xff {
+	case 5, 6, 7, 10, 15:
+		return true
+	default:
+		return false
+	}
 }
 
 func renderScribeSummaries(w io.Writer, asJSON bool, summaries []scribe.Summary) error {

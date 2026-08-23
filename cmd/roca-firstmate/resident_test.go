@@ -181,26 +181,71 @@ func TestWatchResidentRetriesRuntimeInitialization(t *testing.T) {
 	waitExit(t, proc.done, 3*time.Second)
 }
 
-func TestWatchResidentRetriesDatabaseOpen(t *testing.T) {
+func TestWatchRejectsPermanentDatabaseConfiguration(t *testing.T) {
+	clearHomeEnv(t)
+	home := fabricatedHome(t, "northwind-harbor")
+	for _, test := range []struct {
+		name string
+		path string
+	}{
+		{name: "missing", path: filepath.Join(t.TempDir(), "missing.db")},
+		{name: "directory", path: t.TempDir()},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			stdout := &safeBuffer{}
+			stderr := &safeBuffer{}
+			code := runContext(context.Background(), []string{
+				"watch", "--db", test.path, "--home", home, "--home-id", "northwind-harbor",
+			}, nil, stdout, stderr)
+			if code != exitError || stdout.String() == "" {
+				t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+			}
+			matches, err := filepath.Glob(filepath.Join(filepath.Dir(test.path), "logs", "watch-*.jsonl"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(matches) != 0 {
+				t.Fatalf("permanent database configuration entered retry lifecycle: %v", matches)
+			}
+		})
+	}
+}
+
+func TestWatchResidentRetriesTransientDatabaseLock(t *testing.T) {
 	clearHomeEnv(t)
 	t.Setenv("ROCA_FIRSTMATE_WATCH_RETRY", "50ms")
-	source := appliedDBPath(t)
-	dbBytes, err := os.ReadFile(source)
+	path := appliedDBPath(t)
+	home := fabricatedHome(t, "northwind-harbor")
+	locker, err := sql.Open("sqlite", "file:"+path+"?_pragma=busy_timeout(0)")
 	if err != nil {
 		t.Fatal(err)
 	}
-	target := filepath.Join(t.TempDir(), "firstmate.db")
-	home := fabricatedHome(t, "northwind-harbor")
-	proc := startWatch(t, target, home, "northwind-harbor")
-	waitWatchLog(t, target, `"kind":"raise"`, `"kind":"crash-retry"`, `"error":"not-found"`)
-	select {
-	case code := <-proc.done:
-		t.Fatalf("watch exited %d instead of retrying database open", code)
-	default:
-	}
-	if err := os.WriteFile(target, dbBytes, 0o600); err != nil {
+	defer locker.Close()
+	conn, err := locker.Conn(context.Background())
+	if err != nil {
 		t.Fatal(err)
 	}
+	defer conn.Close()
+	if _, err := conn.ExecContext(context.Background(), "BEGIN IMMEDIATE"); err != nil {
+		t.Fatal(err)
+	}
+	locked := true
+	defer func() {
+		if locked {
+			_, _ = conn.ExecContext(context.Background(), "ROLLBACK")
+		}
+	}()
+	proc := startWatch(t, path, home, "northwind-harbor")
+	waitWatchLog(t, path, `"kind":"raise"`, `"kind":"crash-retry"`)
+	select {
+	case code := <-proc.done:
+		t.Fatalf("watch exited %d instead of retrying database lock", code)
+	default:
+	}
+	if _, err := conn.ExecContext(context.Background(), "ROLLBACK"); err != nil {
+		t.Fatal(err)
+	}
+	locked = false
 	waitWatching(t, proc)
 	if err := proc.stdin.Close(); err != nil {
 		t.Fatal(err)

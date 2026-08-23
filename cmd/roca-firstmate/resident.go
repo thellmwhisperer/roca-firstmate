@@ -73,7 +73,6 @@ func runWatch(
 	defer cancel()
 	go closeOnEOF(ctx, cancel, stdin)
 
-	log := &watchTelemetry{logger: watchlog.Open(watchlog.Dir(dbPath), time.Now), stderr: stderr}
 	homes := make([]*leasedHome, 0, len(pairs))
 	for _, pair := range pairs {
 		if err := scribe.ValidateConfig(scribe.Config{
@@ -92,6 +91,11 @@ func runWatch(
 		}
 		homes = append(homes, home)
 	}
+	if err := validateDatabasePath(dbPath); err != nil {
+		printScribeError(stdout, err)
+		return exitError
+	}
+	log := &watchTelemetry{logger: watchlog.Open(watchlog.Dir(dbPath), time.Now), stderr: stderr}
 	for _, home := range homes {
 		log.Append(watchlog.Event{Kind: watchlog.KindRaise, HomeID: home.pair.ID, SeatID: home.seatID})
 	}
@@ -103,6 +107,10 @@ func runWatch(
 		if err == nil {
 			db = opened
 			break
+		}
+		if !retryableDatabaseOpenError(err) {
+			printScribeError(stdout, err)
+			return exitError
 		}
 		logWatchRetry(log, &attempts, err)
 		timer := time.NewTimer(retry)
