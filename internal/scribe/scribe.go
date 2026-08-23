@@ -186,12 +186,25 @@ func New(ctx context.Context, db *sql.DB, config Config) (*Ingester, error) {
 	}
 
 	now := config.Now().UTC().Format(time.RFC3339Nano)
-	if _, err := db.ExecContext(ctx, `INSERT INTO homes (home_id, label, kind, recorded_at)
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, fmt.Errorf("scribe: begin home registration: %w", err)
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `INSERT INTO homes (home_id, label, kind, recorded_at)
 		VALUES (?, ?, ?, ?)
 		ON CONFLICT(home_id) DO UPDATE SET
 			label = excluded.label,
 			kind = excluded.kind`, config.HomeID, config.Label, config.Kind, now); err != nil {
 		return nil, fmt.Errorf("scribe: register home: %w", err)
+	}
+	if config.CommitFence != nil {
+		if err := config.CommitFence(ctx, tx); err != nil {
+			return nil, fmt.Errorf("scribe: fence home registration: %w", err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("scribe: commit home registration: %w", err)
 	}
 	state, err := incrementality.LoadState(ctx, db)
 	if err != nil {
