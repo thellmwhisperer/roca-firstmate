@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -22,12 +23,14 @@ const (
 )
 
 type leasedHome struct {
-	pair     homePair
-	token    string
-	seatID   string
-	ingester *scribe.Ingester
-	source   filewatch.Source
-	holding  bool
+	pair       homePair
+	token      string
+	seatID     string
+	ingester   *scribe.Ingester
+	source     filewatch.Source
+	holding    bool
+	generation uint64
+	retryAt    time.Time
 }
 
 func runWatch(ctx context.Context, db *sql.DB, pairs []homePair, values scribeFlags, stdin io.Reader, stdout io.Writer) int {
@@ -55,15 +58,8 @@ func runWatch(ctx context.Context, db *sql.DB, pairs []homePair, values scribeFl
 		homes = append(homes, home)
 	}
 	defer func() {
-		now := time.Now().UTC()
 		for _, home := range homes {
-			if home.source != nil {
-				_ = home.source.Close()
-			}
-			if home.holding {
-				_ = nerve.ReleaseSeat(context.Background(), db, home.seatID, home.token, now)
-				_ = log.Append(watchlog.Event{Kind: watchlog.KindLeaseLost, HomeID: home.pair.ID, SeatID: home.seatID})
-			}
+			standDownWatchHome(context.Background(), db, home, log, time.Time{})
 		}
 	}()
 
@@ -72,10 +68,12 @@ func runWatch(ctx context.Context, db *sql.DB, pairs []homePair, values scribeFl
 	msgs := make(chan watchMsg, 16)
 	var watches []homeWatch
 	var summaries []scribe.Summary
-	if err := acquireWatchHomes(ctx, db, homes, values.pollInterval, lease, log, msgs, &watches, &summaries); err != nil {
-		printScribeError(stdout, err)
-		return exitError
+	attempt := 0
+	if err := acquireWatchHomes(ctx, db, homes, values.pollInterval, lease, retry, log, msgs, &watches, &summaries); err != nil {
+		attempt++
+		_ = log.Append(watchlog.Event{Kind: watchlog.KindCrashRetry, Attempt: attempt, Err: err.Error()})
 	}
+	announced := len(watches) > 0
 	if len(watches) > 0 {
 		if err := renderWatchStarts(stdout, values.asJSON, watchBackend(watches), summaries); err != nil {
 			printScribeError(stdout, err)
@@ -87,30 +85,34 @@ func runWatch(ctx context.Context, db *sql.DB, pairs []homePair, values scribeFl
 	defer ticker.Stop()
 	heartbeat := time.NewTicker(retry)
 	defer heartbeat.Stop()
-	attempt := 0
 	for {
 		select {
 		case <-ctx.Done():
 			return exitOK
-		case now := <-heartbeat.C:
-			if err := renewWatchHomes(ctx, db, homes, now.UTC(), lease, log); err != nil {
+		case <-heartbeat.C:
+			if err := renewWatchHomes(ctx, db, homes, time.Now().UTC(), lease, retry, log); err != nil {
 				attempt++
 				_ = log.Append(watchlog.Event{Kind: watchlog.KindCrashRetry, Attempt: attempt, Err: err.Error()})
 			}
 		case <-ticker.C:
-			before := len(watches)
-			if err := acquireWatchHomes(ctx, db, homes, values.pollInterval, lease, log, msgs, &watches, &summaries); err != nil {
+			watches = nil
+			summaries = nil
+			if err := acquireWatchHomes(ctx, db, homes, values.pollInterval, lease, retry, log, msgs, &watches, &summaries); err != nil {
 				attempt++
 				_ = log.Append(watchlog.Event{Kind: watchlog.KindCrashRetry, Attempt: attempt, Err: err.Error()})
-				continue
 			}
-			if before == 0 && len(watches) > 0 {
+			if !announced && len(watches) > 0 {
 				if err := renderWatchStarts(stdout, values.asJSON, watchBackend(watches), summaries); err != nil {
 					printScribeError(stdout, err)
 					return exitError
 				}
+				announced = true
 			}
 		case msg := <-msgs:
+			home := homes[msg.idx]
+			if !home.holding || msg.generation != home.generation {
+				continue
+			}
 			if msg.err != nil || msg.eof {
 				attempt++
 				errText := "watch event stream closed"
@@ -118,24 +120,26 @@ func runWatch(ctx context.Context, db *sql.DB, pairs []homePair, values scribeFl
 					errText = msg.err.Error()
 				}
 				_ = log.Append(watchlog.Event{Kind: watchlog.KindCrashRetry, Attempt: attempt, Err: errText})
-				dropWatchHome(homes[msg.idx], log)
+				standDownWatchHome(ctx, db, home, log, time.Now().UTC().Add(retry))
 				continue
 			}
-			if err := ingestWatchPath(ctx, homes[msg.idx], msg.path, values.asJSON, stdout, log); err != nil {
+			if err := ingestWatchPath(ctx, home, msg.path, values.asJSON, stdout, log); err != nil {
 				attempt++
 				_ = log.Append(watchlog.Event{Kind: watchlog.KindCrashRetry, Attempt: attempt, Err: err.Error()})
+				standDownWatchHome(ctx, db, home, log, time.Now().UTC().Add(retry))
 			}
 		}
 	}
 }
 
 func acquireWatchHomes(
-	ctx context.Context, db *sql.DB, homes []*leasedHome, poll, lease time.Duration,
+	ctx context.Context, db *sql.DB, homes []*leasedHome, poll, lease, retry time.Duration,
 	log *watchlog.Logger, msgs chan watchMsg, watches *[]homeWatch, summaries *[]scribe.Summary,
 ) error {
-	now := time.Now().UTC()
+	var failures []error
 	for i, home := range homes {
-		if home.holding {
+		now := time.Now().UTC()
+		if home.holding || now.Before(home.retryAt) {
 			continue
 		}
 		held, seat, err := nerve.TryAcquireSeat(ctx, db, nerve.SeatConfig{
@@ -143,62 +147,82 @@ func acquireWatchHomes(
 			Label: "watch", Destination: "machine", Now: now, Lease: lease,
 		})
 		if err != nil {
-			return err
+			home.retryAt = now.Add(retry)
+			failures = append(failures, err)
+			continue
 		}
 		if !held {
 			continue
 		}
+		home.holding = true
 		_ = log.Append(watchlog.Event{Kind: watchlog.KindLeaseAcquired, HomeID: home.pair.ID, SeatID: seat.SeatID})
 		source, err := filewatch.New(home.ingester.DataRoot(), poll)
 		if err != nil {
-			_ = nerve.ReleaseSeat(ctx, db, home.seatID, home.token, now)
-			return fmt.Errorf("watch: %w", err)
+			standDownWatchHome(ctx, db, home, log, now.Add(retry))
+			failures = append(failures, fmt.Errorf("watch: %w", err))
+			continue
 		}
+		home.source = source
 		summary, err := home.ingester.Backfill(ctx)
 		if err != nil {
-			_ = source.Close()
-			_ = nerve.ReleaseSeat(ctx, db, home.seatID, home.token, now)
-			return err
+			standDownWatchHome(ctx, db, home, log, time.Now().UTC().Add(retry))
+			failures = append(failures, err)
+			continue
+		}
+		fenced, err := nerve.RenewSeat(ctx, db, home.seatID, home.token, time.Now().UTC(), lease)
+		if err != nil {
+			standDownWatchHome(ctx, db, home, log, time.Now().UTC().Add(retry))
+			failures = append(failures, err)
+			continue
+		}
+		if !fenced {
+			standDownWatchHome(ctx, db, home, log, time.Now().UTC().Add(retry))
+			continue
 		}
 		_ = log.Append(watchlog.Event{
 			Kind: watchlog.KindSweep, HomeID: home.pair.ID, SeatID: home.seatID,
 			Scanned: summary.Scanned, Inserted: summary.Inserted,
 			Unchanged: summary.Unchanged, Wakeups: summary.Wakeups,
 		})
-		home.source = source
-		home.holding = true
+		home.retryAt = time.Time{}
+		home.generation++
 		*watches = append(*watches, homeWatch{ingester: home.ingester, source: source})
 		*summaries = append(*summaries, summary)
-		go pumpWatch(ctx, i, source, msgs)
+		go pumpWatch(ctx, i, home.generation, source, msgs)
 	}
-	return nil
+	return errors.Join(failures...)
 }
 
-func renewWatchHomes(ctx context.Context, db *sql.DB, homes []*leasedHome, now time.Time, lease time.Duration, log *watchlog.Logger) error {
+func renewWatchHomes(ctx context.Context, db *sql.DB, homes []*leasedHome, now time.Time, lease, retry time.Duration, log *watchlog.Logger) error {
+	var failures []error
 	for _, home := range homes {
 		if !home.holding {
 			continue
 		}
 		held, err := nerve.RenewSeat(ctx, db, home.seatID, home.token, now, lease)
 		if err != nil {
-			return err
+			standDownWatchHome(ctx, db, home, log, now.Add(retry))
+			failures = append(failures, err)
+			continue
 		}
 		if !held {
-			dropWatchHome(home, log)
+			standDownWatchHome(ctx, db, home, log, now.Add(retry))
 		}
 	}
-	return nil
+	return errors.Join(failures...)
 }
 
-func dropWatchHome(home *leasedHome, log *watchlog.Logger) {
+func standDownWatchHome(ctx context.Context, db *sql.DB, home *leasedHome, log *watchlog.Logger, retryAt time.Time) {
 	if home.source != nil {
 		_ = home.source.Close()
 		home.source = nil
 	}
 	if home.holding {
+		_ = nerve.ReleaseSeat(ctx, db, home.seatID, home.token, time.Now().UTC())
 		home.holding = false
 		_ = log.Append(watchlog.Event{Kind: watchlog.KindLeaseLost, HomeID: home.pair.ID, SeatID: home.seatID})
 	}
+	home.retryAt = retryAt
 }
 
 func ingestWatchPath(ctx context.Context, home *leasedHome, path string, asJSON bool, stdout io.Writer, log *watchlog.Logger) error {
@@ -231,7 +255,7 @@ func ingestWatchPath(ctx context.Context, home *leasedHome, path string, asJSON 
 	return renderScribe(stdout, asJSON, event)
 }
 
-func pumpWatch(ctx context.Context, idx int, source filewatch.Source, out chan watchMsg) {
+func pumpWatch(ctx context.Context, idx int, generation uint64, source filewatch.Source, out chan watchMsg) {
 	events := source.Events()
 	errs := source.Errors()
 	for events != nil || errs != nil {
@@ -244,7 +268,7 @@ func pumpWatch(ctx context.Context, idx int, source filewatch.Source, out chan w
 				continue
 			}
 			select {
-			case out <- watchMsg{idx: idx, err: err}:
+			case out <- watchMsg{idx: idx, generation: generation, err: err}:
 			case <-ctx.Done():
 			}
 			return
@@ -252,13 +276,13 @@ func pumpWatch(ctx context.Context, idx int, source filewatch.Source, out chan w
 			if !ok {
 				events = nil
 				select {
-				case out <- watchMsg{idx: idx, eof: true}:
+				case out <- watchMsg{idx: idx, generation: generation, eof: true}:
 				case <-ctx.Done():
 				}
 				return
 			}
 			select {
-			case out <- watchMsg{idx: idx, path: path}:
+			case out <- watchMsg{idx: idx, generation: generation, path: path}:
 			case <-ctx.Done():
 			}
 		}

@@ -10,11 +10,13 @@ import (
 	"time"
 )
 
+const watchSeatPrefix = "watch-"
+
 // WatchSeatID is the single-flight seat identity for one home's filesystem
 // watcher. Concurrent MCP sessions compete for this row; they do not invent a
 // second lock.
 func WatchSeatID(homeID string) string {
-	return "watch-" + strings.TrimSpace(homeID)
+	return watchSeatPrefix + strings.TrimSpace(homeID)
 }
 
 // NewHolderToken returns an opaque 32-byte identity. It is stored as the seat

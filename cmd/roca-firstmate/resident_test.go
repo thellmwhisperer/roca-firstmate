@@ -92,6 +92,101 @@ func TestWatchResidentSingleFlightAndTakeover(t *testing.T) {
 	waitExit(t, standin.done, 3*time.Second)
 }
 
+func TestWatchResidentRetriesFailedIngestWithCatchUp(t *testing.T) {
+	clearHomeEnv(t)
+	t.Setenv("ROCA_FIRSTMATE_WATCH_LEASE", "2s")
+	t.Setenv("ROCA_FIRSTMATE_WATCH_RETRY", "100ms")
+	path := appliedDBPath(t)
+	home := fabricatedHome(t, "northwind-harbor")
+	captain := filepath.Join(home, "data", "captain.md")
+	proc := startWatch(t, path, home, "northwind-harbor")
+	waitWatching(t, proc)
+
+	db, err := sql.Open("sqlite", "file:"+path+"?_pragma=busy_timeout(5000)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if _, err := db.Exec(`CREATE TRIGGER fabricated_ingest_failure
+		BEFORE INSERT ON working_set_versions
+		WHEN NEW.relative_path = 'captain.md' AND NEW.version = 2
+		BEGIN SELECT RAISE(ABORT, 'fabricated transient failure'); END`); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(captain, []byte("# transient failure then catch-up\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	waitWatchLog(t, path, `"kind":"crash-retry"`, `"kind":"lease-lost"`)
+	select {
+	case code := <-proc.done:
+		t.Fatalf("watch exited %d instead of retrying", code)
+	default:
+	}
+	if _, err := db.Exec(`DROP TRIGGER fabricated_ingest_failure`); err != nil {
+		t.Fatal(err)
+	}
+	waitVersion(t, path, "northwind-harbor", "captain.md", 2)
+	if err := proc.stdin.Close(); err != nil {
+		t.Fatal(err)
+	}
+	waitExit(t, proc.done, 3*time.Second)
+}
+
+func TestAttachAndFollowRejectWatchLeaseSeatID(t *testing.T) {
+	clearHomeEnv(t)
+	for _, verb := range []string{"attach", "follow"} {
+		t.Run(verb, func(t *testing.T) {
+			path := appliedDBPath(t)
+			home := fabricatedHome(t, "northwind-harbor")
+			stdout := &safeBuffer{}
+			stderr := &safeBuffer{}
+			code := runContext(context.Background(), []string{
+				verb, "--db", path, "--home", home, "--home-id", "northwind-harbor",
+				"--seat-id", "watch-northwind-harbor",
+			}, nil, stdout, stderr)
+			if code != exitError || !strings.Contains(stdout.String(), "reserved") {
+				t.Fatalf("%s code=%d stdout=%q stderr=%q", verb, code, stdout.String(), stderr.String())
+			}
+		})
+	}
+}
+
+func TestRenewFailureStandsDownWatchHome(t *testing.T) {
+	db, err := sql.Open("sqlite", "file:"+filepath.Join(t.TempDir(), "closed.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	source := &closingWatchSource{events: make(chan string), errors: make(chan error)}
+	home := &leasedHome{
+		token: "holder", seatID: "watch-northwind-harbor", source: source, holding: true,
+	}
+	now := time.Now().UTC()
+	err = renewWatchHomes(context.Background(), db, []*leasedHome{home}, now, time.Minute, 50*time.Millisecond, nil)
+	if err == nil {
+		t.Fatal("renew against closed database succeeded")
+	}
+	if home.holding || home.source != nil || !source.closed {
+		t.Fatalf("renew failure left watcher active: holding=%v source=%v closed=%v", home.holding, home.source, source.closed)
+	}
+	if home.retryAt.Before(now.Add(50 * time.Millisecond)) {
+		t.Fatalf("renew failure did not back off until %s", home.retryAt)
+	}
+}
+
+type closingWatchSource struct {
+	events chan string
+	errors chan error
+	closed bool
+}
+
+func (s *closingWatchSource) Backend() string       { return "test" }
+func (s *closingWatchSource) Events() <-chan string { return s.events }
+func (s *closingWatchSource) Errors() <-chan error  { return s.errors }
+func (s *closingWatchSource) Close() error          { s.closed = true; return nil }
+
 type watchProc struct {
 	stdin io.WriteCloser
 	out   *safeBuffer
@@ -192,6 +287,32 @@ func assertWatchLog(t *testing.T, dbPath string, want ...string) {
 			t.Fatalf("watch log missing %s in %s", snippet, text)
 		}
 	}
+}
+
+func waitWatchLog(t *testing.T, dbPath string, want ...string) {
+	t.Helper()
+	deadline := time.Now().Add(8 * time.Second)
+	for time.Now().Before(deadline) {
+		matches, err := filepath.Glob(filepath.Join(filepath.Dir(dbPath), "logs", "watch-*.jsonl"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(matches) > 0 {
+			body, err := os.ReadFile(matches[0])
+			if err != nil {
+				t.Fatal(err)
+			}
+			found := true
+			for _, snippet := range want {
+				found = found && strings.Contains(string(body), snippet)
+			}
+			if found {
+				return
+			}
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatalf("watch log did not contain %v", want)
 }
 
 func watchHolders(t *testing.T, dbPath, homeID string) int {

@@ -159,6 +159,25 @@ func TestRegisterSeatKeepsExplicitIdentityOutOfDefaultLabel(t *testing.T) {
 	}
 }
 
+func TestRegisterSeatRejectsWatchLeaseIdentity(t *testing.T) {
+	db := appliedDB(t)
+	seedHome(t, db)
+	_, err := nerve.RegisterSeat(context.Background(), db, nerve.SeatConfig{
+		SeatID: "watch-northwind-harbor", HomeID: "northwind-harbor",
+		Workspace: filepath.Join(t.TempDir(), "lantern-workspace"), Destination: "machine", Now: frozen,
+	})
+	if err == nil || !strings.Contains(err.Error(), "reserved") {
+		t.Fatalf("reserved watch seat registration error = %v", err)
+	}
+	var count int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM seats`).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 0 {
+		t.Fatalf("reserved watch seat created %d rows", count)
+	}
+}
+
 func TestTickDoesNotDrainWakeupsOwnedByLiveSeat(t *testing.T) {
 	db := appliedDB(t)
 	seedHome(t, db)
@@ -186,6 +205,51 @@ func TestTickDoesNotDrainWakeupsOwnedByLiveSeat(t *testing.T) {
 	}
 	if handled != 0 {
 		t.Fatalf("live destination wakeup handled=%d", handled)
+	}
+}
+
+func TestTickExcludesWatchLeasesFromSubscriptionAndSilence(t *testing.T) {
+	db := appliedDB(t)
+	seedHome(t, db)
+	token, err := nerve.NewHolderToken()
+	if err != nil {
+		t.Fatal(err)
+	}
+	held, seat, err := nerve.TryAcquireSeat(context.Background(), db, nerve.SeatConfig{
+		HomeID: "northwind-harbor", HolderToken: token,
+		Destination: "machine", Now: frozen, Lease: time.Minute,
+	})
+	if err != nil || !held {
+		t.Fatalf("acquire watch lease held=%v err=%v", held, err)
+	}
+	mustExec(t, db, `INSERT INTO wakeups (
+		destination, generation, kind, home_id, payload, created_at
+	) VALUES ('machine', 1, 'ready', 'northwind-harbor', 'fabricated', '2026-03-14T10:00:00Z')`)
+
+	var output bytes.Buffer
+	result, err := nerve.Tick(context.Background(), db, frozen.Add(time.Second), 5*time.Minute, &output)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.OrphanWakeups != 1 || !strings.Contains(output.String(), `"kind":"ready"`) {
+		t.Fatalf("watch lease suppressed orphan delivery: %+v output=%q", result, output.String())
+	}
+	if err := nerve.ReleaseSeat(context.Background(), db, seat.SeatID, token, frozen.Add(2*time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	result, err = nerve.Tick(context.Background(), db, frozen.Add(10*time.Minute), 5*time.Minute, &output)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.SilenceWakeups != 0 {
+		t.Fatalf("expired watch lease emitted silence wakeup: %+v", result)
+	}
+	var silenceRows int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM wakeups WHERE kind = 'seat-silent'`).Scan(&silenceRows); err != nil {
+		t.Fatal(err)
+	}
+	if silenceRows != 0 {
+		t.Fatalf("expired watch lease created %d silence rows", silenceRows)
 	}
 }
 
