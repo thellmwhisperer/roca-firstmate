@@ -137,13 +137,17 @@ func RegisterSeat(ctx context.Context, db *sql.DB, config SeatConfig) (Seat, err
 	if now.IsZero() {
 		now = time.Now().UTC()
 	}
+	explicitSeatID := strings.TrimSpace(config.SeatID)
+	if strings.HasPrefix(explicitSeatID, watchSeatPrefix) {
+		return Seat{}, fmt.Errorf("seat id prefix %q is reserved for watch leases", watchSeatPrefix)
+	}
 	seatID, fingerprint, err := WorkspaceSeatID(config.HomeID, config.Workspace)
 	if err != nil {
 		return Seat{}, err
 	}
 	opaqueLabel := seatID
-	if strings.TrimSpace(config.SeatID) != "" {
-		seatID = strings.TrimSpace(config.SeatID)
+	if explicitSeatID != "" {
+		seatID = explicitSeatID
 	}
 	if strings.TrimSpace(config.Label) == "" {
 		config.Label = opaqueLabel
@@ -354,7 +358,8 @@ func claimNext(ctx context.Context, db *sql.DB, destination, orphanCutoff string
 		WHERE w.handled = 0 AND w.destination = ?
 		AND (? = '' OR NOT EXISTS (
 			SELECT 1 FROM seats s
-			WHERE s.destination = w.destination AND s.lease_until > ?
+				WHERE s.destination = w.destination AND s.lease_until > ?
+				AND s.seat_id NOT GLOB 'watch-*'
 		))
 		` + filterSQL + `
 		ORDER BY generation, id LIMIT 1
@@ -410,7 +415,7 @@ func Tick(ctx context.Context, db *sql.DB, now time.Time, silenceAfter time.Dura
 
 func silenceClock(ctx context.Context, db *sql.DB, now time.Time, silenceAfter time.Duration) (int, error) {
 	rows, err := db.QueryContext(ctx, `SELECT seat_id, home_id, destination, last_seen_at, silence_generation
-		FROM seats WHERE lease_until <= ? ORDER BY seat_id`, now.Format(time.RFC3339Nano))
+		FROM seats WHERE lease_until <= ? AND seat_id NOT GLOB 'watch-*' ORDER BY seat_id`, now.Format(time.RFC3339Nano))
 	if err != nil {
 		return 0, fmt.Errorf("read silent seats: %w", err)
 	}

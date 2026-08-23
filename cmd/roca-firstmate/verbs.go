@@ -573,10 +573,11 @@ type homeWatch struct {
 }
 
 type watchMsg struct {
-	idx  int
-	path string
-	err  error
-	eof  bool
+	idx        int
+	generation uint64
+	path       string
+	err        error
+	eof        bool
 }
 
 func renderWatchStarts(w io.Writer, asJSON bool, backend string, summaries []scribe.Summary) error {
