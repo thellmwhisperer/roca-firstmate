@@ -323,15 +323,14 @@ func acquireWatchHomes(
 			home.mu.Unlock()
 			continue
 		}
-		fenceNow := time.Now().UTC()
-		fenced, err := nerve.RenewSeat(leaseCtx, db, home.seatID, home.token, fenceNow, lease)
+		fenced, deadline, err := renewWatchSeat(leaseCtx, db, home.seatID, home.token, lease)
 		if err != nil || !fenced {
 			closedSource, lost := standDownWatchHomeLocked(ctx, db, home, generation, time.Now().UTC().Add(retry))
 			home.mu.Unlock()
 			finishWatchStandDown(home, closedSource, lost, log)
 		} else {
 			home.retryAt = time.Time{}
-			home.leaseUntil = fenceNow.Add(lease)
+			home.leaseUntil = deadline
 			go pumpWatch(leaseCtx, i, generation, source, msgs)
 			home.mu.Unlock()
 		}
@@ -353,7 +352,24 @@ func acquireWatchHomes(
 	return errors.Join(failures...)
 }
 
-func renewWatchHomes(ctx context.Context, db *sql.DB, homes []*leasedHome, now time.Time, lease, retry time.Duration, log *watchTelemetry) error {
+func renewWatchSeat(
+	ctx context.Context, db *sql.DB, seatID, token string, lease time.Duration,
+) (bool, time.Time, error) {
+	for range 2 {
+		renewedAt := time.Now().UTC()
+		held, err := nerve.RenewSeat(ctx, db, seatID, token, renewedAt, lease)
+		if err != nil || !held {
+			return held, time.Time{}, err
+		}
+		deadline := renewedAt.Add(lease)
+		if time.Now().UTC().Before(deadline) {
+			return true, deadline, nil
+		}
+	}
+	return false, time.Time{}, nil
+}
+
+func renewWatchHomes(ctx context.Context, db *sql.DB, homes []*leasedHome, lease, retry time.Duration, log *watchTelemetry) error {
 	var failures []error
 	for _, home := range homes {
 		var closedSource filewatch.Source
@@ -364,11 +380,11 @@ func renewWatchHomes(ctx context.Context, db *sql.DB, homes []*leasedHome, now t
 			continue
 		}
 		generation := home.generation
-		held, err := nerve.RenewSeat(ctx, db, home.seatID, home.token, now, lease)
+		held, deadline, err := renewWatchSeat(ctx, db, home.seatID, home.token, lease)
 		if err != nil || !held {
-			closedSource, lost = standDownWatchHomeLocked(ctx, db, home, generation, now.Add(retry))
+			closedSource, lost = standDownWatchHomeLocked(ctx, db, home, generation, time.Now().UTC().Add(retry))
 		} else {
-			home.leaseUntil = now.Add(lease)
+			home.leaseUntil = deadline
 		}
 		home.mu.Unlock()
 		finishWatchStandDown(home, closedSource, lost, log)
@@ -390,7 +406,7 @@ func heartbeatWatchHomes(
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			if err := renewWatchHomes(ctx, db, homes, time.Now().UTC(), lease, retry, log); err != nil {
+			if err := renewWatchHomes(ctx, db, homes, lease, retry, log); err != nil {
 				if ctx.Err() != nil {
 					return
 				}

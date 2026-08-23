@@ -237,6 +237,69 @@ func TestWatchStandbyDoesNotMutateHomeMetadata(t *testing.T) {
 	}
 }
 
+func TestWatchHomeMetadataUpdateIsLeaseFenced(t *testing.T) {
+	path := appliedDBPath(t)
+	db, err := openDatabase(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	homePath := fabricatedHome(t, "northwind-harbor")
+	if err := scribe.EnsureHome(context.Background(), db, scribe.Config{
+		Home: homePath, HomeID: "northwind-harbor", Label: "Prepared", Kind: "primary",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	firstToken, err := nerve.NewHolderToken()
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	seatID := nerve.WatchSeatID("northwind-harbor")
+	held, _, err := nerve.TryAcquireSeat(context.Background(), db, nerve.SeatConfig{
+		SeatID: seatID, HomeID: "northwind-harbor", HolderToken: firstToken,
+		Destination: "machine", Now: now, Lease: 2 * time.Second,
+	})
+	if err != nil || !held {
+		t.Fatalf("first lease held=%v err=%v", held, err)
+	}
+	stale := &leasedHome{
+		pair:  homePair{Path: homePath, ID: "northwind-harbor", Label: "Stale Label", Kind: "primary"},
+		token: firstToken, seatID: seatID, sourceAgent: "firstmate",
+	}
+	if _, err := newWatchIngester(context.Background(), db, stale); err != nil {
+		t.Fatal(err)
+	}
+	secondToken, err := nerve.NewHolderToken()
+	if err != nil {
+		t.Fatal(err)
+	}
+	taken, _, err := nerve.TryAcquireSeat(context.Background(), db, nerve.SeatConfig{
+		SeatID: seatID, HomeID: "northwind-harbor", HolderToken: secondToken,
+		Destination: "machine", Now: now.Add(3 * time.Second), Lease: 2 * time.Second,
+	})
+	if err != nil || !taken {
+		t.Fatalf("second lease held=%v err=%v", taken, err)
+	}
+	current := &leasedHome{
+		pair:  homePair{Path: homePath, ID: "northwind-harbor", Label: "Current Label", Kind: "secondmate"},
+		token: secondToken, seatID: seatID, sourceAgent: "firstmate",
+	}
+	if _, err := newWatchIngester(context.Background(), db, current); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := newWatchIngester(context.Background(), db, stale); err == nil {
+		t.Fatal("stale holder updated home metadata")
+	}
+	var label, kind string
+	if err := db.QueryRow(`SELECT label, kind FROM homes WHERE home_id = ?`, "northwind-harbor").Scan(&label, &kind); err != nil {
+		t.Fatal(err)
+	}
+	if label != "Current Label" || kind != "secondmate" {
+		t.Fatalf("stale metadata committed label=%q kind=%q", label, kind)
+	}
+}
+
 func TestWatchResidentRetriesFailedIngestWithCatchUp(t *testing.T) {
 	clearHomeEnv(t)
 	t.Setenv("ROCA_FIRSTMATE_WATCH_LEASE", "2s")
@@ -467,8 +530,9 @@ func TestWatchIngesterRejectsStaleHolderCommit(t *testing.T) {
 		pair:  homePair{Path: homePath, ID: "northwind-harbor"},
 		token: token, seatID: nerve.WatchSeatID("northwind-harbor"), sourceAgent: "firstmate",
 	}
-	ingester, err := newWatchIngester(context.Background(), db, home)
-	if err != nil {
+	if err := scribe.EnsureHome(context.Background(), db, scribe.Config{
+		Home: homePath, HomeID: home.pair.ID, SourceAgent: home.sourceAgent,
+	}); err != nil {
 		t.Fatal(err)
 	}
 	now := time.Now().UTC()
@@ -477,6 +541,10 @@ func TestWatchIngesterRejectsStaleHolderCommit(t *testing.T) {
 	})
 	if err != nil || !held {
 		t.Fatalf("initial lease held=%v err=%v", held, err)
+	}
+	ingester, err := newWatchIngester(context.Background(), db, home)
+	if err != nil {
+		t.Fatal(err)
 	}
 	if _, err := ingester.Backfill(context.Background()); err != nil {
 		t.Fatal(err)
@@ -614,7 +682,7 @@ func TestRenewFailureStandsDownWatchHome(t *testing.T) {
 		token: "holder", seatID: "watch-northwind-harbor", source: source, holding: true,
 	}
 	now := time.Now().UTC()
-	err = renewWatchHomes(context.Background(), db, []*leasedHome{home}, now, time.Minute, 50*time.Millisecond, nil)
+	err = renewWatchHomes(context.Background(), db, []*leasedHome{home}, time.Minute, 50*time.Millisecond, nil)
 	if err == nil {
 		t.Fatal("renew against closed database succeeded")
 	}
@@ -623,6 +691,90 @@ func TestRenewFailureStandsDownWatchHome(t *testing.T) {
 	}
 	if home.retryAt.Before(now.Add(50 * time.Millisecond)) {
 		t.Fatalf("renew failure did not back off until %s", home.retryAt)
+	}
+}
+
+func TestDelayedRenewalKeepsOnlyFutureLease(t *testing.T) {
+	path := appliedDBPath(t)
+	db, err := openDatabase(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	homePath := fabricatedHome(t, "northwind-harbor")
+	if err := scribe.EnsureHome(context.Background(), db, scribe.Config{
+		Home: homePath, HomeID: "northwind-harbor", Label: "Northwind Harbor", Kind: "primary",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	token, err := nerve.NewHolderToken()
+	if err != nil {
+		t.Fatal(err)
+	}
+	seatID := nerve.WatchSeatID("northwind-harbor")
+	held, _, err := nerve.TryAcquireSeat(context.Background(), db, nerve.SeatConfig{
+		SeatID: seatID, HomeID: "northwind-harbor", HolderToken: token,
+		Destination: "machine", Now: time.Now().UTC(), Lease: time.Minute,
+	})
+	if err != nil || !held {
+		t.Fatalf("initial lease held=%v err=%v", held, err)
+	}
+	home := &leasedHome{token: token, seatID: seatID, holding: true, generation: 1}
+	defer standDownWatchHome(context.Background(), db, home, 0, nil, time.Time{})
+	locker, err := sql.Open("sqlite", "file:"+path+"?_pragma=busy_timeout(0)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer locker.Close()
+	conn, err := locker.Conn(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	if _, err := conn.ExecContext(context.Background(), "BEGIN IMMEDIATE"); err != nil {
+		t.Fatal(err)
+	}
+	locked := true
+	defer func() {
+		if locked {
+			_, _ = conn.ExecContext(context.Background(), "ROLLBACK")
+		}
+	}()
+	started := make(chan struct{})
+	done := make(chan error, 1)
+	go func() {
+		close(started)
+		done <- renewWatchHomes(context.Background(), db, []*leasedHome{home}, 500*time.Millisecond, 20*time.Millisecond, nil)
+	}()
+	<-started
+	time.Sleep(700 * time.Millisecond)
+	if _, err := conn.ExecContext(context.Background(), "ROLLBACK"); err != nil {
+		t.Fatal(err)
+	}
+	locked = false
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	home.mu.Lock()
+	stillHolding := home.holding
+	deadline := home.leaseUntil
+	home.mu.Unlock()
+	if !stillHolding || !time.Now().UTC().Before(deadline) {
+		t.Fatalf("delayed renewal holding=%v deadline=%s", stillHolding, deadline)
+	}
+	competitor, err := nerve.NewHolderToken()
+	if err != nil {
+		t.Fatal(err)
+	}
+	stolen, _, err := nerve.TryAcquireSeat(context.Background(), db, nerve.SeatConfig{
+		SeatID: seatID, HomeID: "northwind-harbor", HolderToken: competitor,
+		Destination: "machine", Now: time.Now().UTC(), Lease: time.Minute,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stolen {
+		t.Fatal("delayed renewal left an immediately acquirable lease")
 	}
 }
 
