@@ -121,11 +121,11 @@ Do not install this repository onto a live captain La Roca while developing. Pro
 
 | Bump | When |
 | --- | --- |
-| MAJOR | Install contract, manifest schema, or the declared database file list changes. |
+| MAJOR | Install contract, manifest schema, or the declared database file list changes. After a public release exists, changing the declared `binary` or adding/removing a checksummed payload file (the executable or a declared database) is also MAJOR: the installer verifies an exact file set. |
 | MINOR | Compatible features: new verbs, Nerve surfaces, schema that `Ensure` can apply. |
 | PATCH | Fixes, docs, packaging. No payload-file or schema-list change. |
 
-Do not retag. Cut the next patch. `0.5.0` is the first installable GitHub release.
+Do not retag; cut the next patch. `0.5.0` is the first public installable package; `0.4.0` was never published, so that jump stays MINOR as the initial public contract.
 
 ## Frozen contract
 
