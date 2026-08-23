@@ -20,26 +20,28 @@ import (
 )
 
 const (
-	defaultWatchLease = 2 * time.Minute
-	defaultWatchRetry = 30 * time.Second
+	defaultWatchLease           = 2 * time.Minute
+	defaultWatchRetry           = 30 * time.Second
+	defaultWatchShutdownTimeout = 250 * time.Millisecond
 )
 
 type leasedHome struct {
-	mu          sync.Mutex
-	pair        homePair
-	token       string
-	seatID      string
-	sourceAgent string
-	ingester    watchIngester
-	newIngester func(context.Context, *sql.DB, *leasedHome) (watchIngester, error)
-	source      filewatch.Source
-	prepared    bool
-	holding     bool
-	generation  uint64
-	leaseUntil  time.Time
-	retryAt     time.Time
-	leaseCtx    context.Context
-	leaseCancel context.CancelFunc
+	mu           sync.Mutex
+	pair         homePair
+	token        string
+	seatID       string
+	sourceAgent  string
+	ingester     watchIngester
+	newIngester  func(context.Context, *sql.DB, *leasedHome) (watchIngester, error)
+	source       filewatch.Source
+	prepared     bool
+	holding      bool
+	generation   uint64
+	leaseUntil   time.Time
+	standbyUntil time.Time
+	retryAt      time.Time
+	leaseCtx     context.Context
+	leaseCancel  context.CancelFunc
 }
 
 type watchTelemetry struct {
@@ -107,24 +109,19 @@ func runWatchWithDatabase(
 		printScribeError(stdout, err)
 		return exitError
 	}
+	db, openErr := openDB(dbPath)
+	if openErr != nil && !retryableDatabaseOpenError(openErr) {
+		printScribeError(stdout, openErr)
+		return exitError
+	}
 	log := &watchTelemetry{logger: watchlog.Open(watchlog.Dir(dbPath), time.Now), stderr: stderr}
 	for _, home := range homes {
 		log.Append(watchlog.Event{Kind: watchlog.KindRaise, HomeID: home.pair.ID, SeatID: home.seatID})
 	}
 	retry := watchRetryDuration()
 	var attempts atomic.Int64
-	var db *sql.DB
-	for db == nil {
-		opened, err := openDB(dbPath)
-		if err == nil {
-			db = opened
-			break
-		}
-		if !retryableDatabaseOpenError(err) {
-			printScribeError(stdout, err)
-			return exitError
-		}
-		logWatchRetry(log, &attempts, err)
+	for openErr != nil {
+		logWatchRetry(log, &attempts, openErr)
 		timer := time.NewTimer(retry)
 		select {
 		case <-ctx.Done():
@@ -134,11 +131,18 @@ func runWatchWithDatabase(
 			return exitOK
 		case <-timer.C:
 		}
+		db, openErr = openDB(dbPath)
+		if openErr != nil && !retryableDatabaseOpenError(openErr) {
+			printScribeError(stdout, openErr)
+			return exitError
+		}
 	}
 	defer db.Close()
 	defer func() {
+		cleanupCtx, cleanupCancel := context.WithTimeout(ctx, defaultWatchShutdownTimeout)
+		defer cleanupCancel()
 		for _, home := range homes {
-			standDownWatchHome(context.Background(), db, home, 0, log, time.Time{})
+			standDownWatchHome(cleanupCtx, db, home, 0, log, time.Time{})
 		}
 	}()
 
@@ -167,13 +171,13 @@ func runWatchWithDatabase(
 		}
 	}
 
-	ticker := time.NewTicker(retry)
-	defer ticker.Stop()
+	attemptTimer := time.NewTimer(nextWatchAttempt(homes, retry))
+	defer attemptTimer.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			return exitOK
-		case <-ticker.C:
+		case <-attemptTimer.C:
 			watches = nil
 			summaries = nil
 			if err := acquireWatchHomes(ctx, db, homes, values.pollInterval, lease, retry, log, msgs, &watches, &summaries); err != nil {
@@ -186,6 +190,7 @@ func runWatchWithDatabase(
 				}
 				announced = true
 			}
+			attemptTimer.Reset(nextWatchAttempt(homes, retry))
 		case msg := <-msgs:
 			home := homes[msg.idx]
 			leaseCtx, held := watchHomeLease(home, msg.generation, time.Now().UTC())
@@ -248,6 +253,7 @@ func acquireWatchHomes(
 			if err != nil {
 				home.mu.Lock()
 				home.retryAt = time.Now().UTC().Add(retry)
+				home.standbyUntil = time.Time{}
 				home.mu.Unlock()
 				failures = append(failures, err)
 				continue
@@ -264,15 +270,23 @@ func acquireWatchHomes(
 		})
 		if err != nil {
 			home.retryAt = acquireNow.Add(retry)
+			home.standbyUntil = time.Time{}
 			home.mu.Unlock()
 			failures = append(failures, err)
 			continue
 		}
 		if !held {
+			deadline, parseErr := time.Parse(time.RFC3339Nano, seat.LeaseUntil)
+			if parseErr == nil && deadline.After(acquireNow) {
+				home.standbyUntil = deadline.UTC()
+			} else {
+				home.standbyUntil = time.Time{}
+			}
 			home.mu.Unlock()
 			continue
 		}
 		home.holding = true
+		home.standbyUntil = time.Time{}
 		home.leaseUntil = acquireNow.Add(lease)
 		home.generation++
 		generation := home.generation
@@ -441,9 +455,10 @@ func standDownWatchHomeLocked(
 	}
 	lost := home.holding
 	home.leaseUntil = time.Time{}
+	home.standbyUntil = time.Time{}
 	if lost {
 		home.holding = false
-		_ = nerve.ReleaseSeat(context.WithoutCancel(ctx), db, home.seatID, home.token, time.Now().UTC())
+		_ = nerve.ReleaseSeat(ctx, db, home.seatID, home.token, time.Now().UTC())
 	}
 	home.retryAt = retryAt
 	return closedSource, lost
@@ -494,6 +509,36 @@ func watchHeartbeatDuration(lease, retry time.Duration) time.Duration {
 		interval = retry
 	}
 	return interval
+}
+
+func nextWatchAttempt(homes []*leasedHome, retry time.Duration) time.Duration {
+	now := time.Now().UTC()
+	next := retry
+	for _, home := range homes {
+		home.mu.Lock()
+		holding := home.holding
+		retryAt := home.retryAt
+		standbyUntil := home.standbyUntil
+		home.mu.Unlock()
+		if holding {
+			continue
+		}
+		if retryAt.IsZero() {
+			retryAt = now.Add(retry)
+		}
+		attemptAt := retryAt
+		if !standbyUntil.IsZero() && standbyUntil.Before(attemptAt) {
+			attemptAt = standbyUntil
+		}
+		delay := attemptAt.Sub(now)
+		if delay <= 0 {
+			return time.Millisecond
+		}
+		if delay < next {
+			next = delay
+		}
+	}
+	return next
 }
 
 func ingestWatchPath(ctx context.Context, home *leasedHome, path string, asJSON bool, stdout io.Writer, log *watchTelemetry) error {

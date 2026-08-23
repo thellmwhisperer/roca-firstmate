@@ -33,7 +33,7 @@ func TestTryAcquireSeatSingleFlightAndInherit(t *testing.T) {
 		t.Fatalf("first holder %+v held=%v", seat, held)
 	}
 
-	stolen, _, err := nerve.TryAcquireSeat(ctx, db, nerve.SeatConfig{
+	stolen, standby, err := nerve.TryAcquireSeat(ctx, db, nerve.SeatConfig{
 		HomeID: "northwind-harbor", HolderToken: secondToken,
 		Destination: "machine", Now: frozen.Add(time.Second), Lease: lease,
 	})
@@ -42,6 +42,9 @@ func TestTryAcquireSeatSingleFlightAndInherit(t *testing.T) {
 	}
 	if stolen {
 		t.Fatal("live lease was stolen")
+	}
+	if standby.Status != "standby" || standby.LeaseUntil != seat.LeaseUntil {
+		t.Fatalf("standby lease = %+v, want observed holder deadline", standby)
 	}
 
 	renewed, err := nerve.RenewSeat(ctx, db, seat.SeatID, firstToken, frozen.Add(time.Second), lease)

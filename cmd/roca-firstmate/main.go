@@ -204,8 +204,12 @@ func retryableDatabaseOpenError(err error) bool {
 	if !errors.As(err, &sqliteErr) {
 		return false
 	}
-	switch sqliteErr.Code() & 0xff {
-	case 5, 6, 7, 10, 15:
+	return retryableSQLiteCode(sqliteErr.Code())
+}
+
+func retryableSQLiteCode(code int) bool {
+	switch code & 0xff {
+	case 5, 6, 7, 10, 14, 15:
 		return true
 	default:
 		return false
