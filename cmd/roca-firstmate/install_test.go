@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"runtime"
+	"strings"
 	"testing"
 )
 
@@ -21,6 +22,7 @@ type templateObject struct {
 	Type    string `json:"type"`
 	Name    string `json:"name"`
 	TblName string `json:"tbl_name"`
+	SQL     string `json:"sql"`
 }
 
 type templateColumn struct {
@@ -89,7 +91,7 @@ func loadTemplateCatalog(t *testing.T) templateCatalog {
 
 func dumpTemplateCatalog(t *testing.T, db *sql.DB) templateCatalog {
 	t.Helper()
-	rows, err := db.Query(`SELECT type, name, tbl_name FROM sqlite_master
+	rows, err := db.Query(`SELECT type, name, tbl_name, sql FROM sqlite_master
 		WHERE name NOT LIKE 'sqlite_%' ORDER BY type, name`)
 	if err != nil {
 		t.Fatalf("list schema objects: %v", err)
@@ -101,9 +103,10 @@ func dumpTemplateCatalog(t *testing.T, db *sql.DB) templateCatalog {
 	}
 	for rows.Next() {
 		var object templateObject
-		if err := rows.Scan(&object.Type, &object.Name, &object.TblName); err != nil {
+		if err := rows.Scan(&object.Type, &object.Name, &object.TblName, &object.SQL); err != nil {
 			t.Fatalf("scan schema object: %v", err)
 		}
+		object.SQL = normalizeSchemaSQL(object.SQL)
 		catalog.Objects = append(catalog.Objects, object)
 	}
 	if err := rows.Err(); err != nil {
@@ -143,6 +146,10 @@ func dumpTemplateCatalog(t *testing.T, db *sql.DB) templateCatalog {
 		t.Fatalf("plugin_schema row: %v", err)
 	}
 	return catalog
+}
+
+func normalizeSchemaSQL(statement string) string {
+	return strings.Join(strings.Fields(statement), " ")
 }
 
 func catalogDiff(want, got templateCatalog) string {

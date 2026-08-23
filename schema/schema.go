@@ -1,4 +1,4 @@
-// Package schema owns the firstmate.db DDL applied at first run.
+// Package schema owns the firstmate.db DDL applied by database-backed verbs.
 //
 // This package is shared by Scribe's versioned mirror and Nerve's queue state.
 package schema
@@ -25,8 +25,22 @@ var migrationV2ToV3SQL string
 
 // Apply creates the five versioned inventory families and identity tables.
 func Apply(db *sql.DB) error {
-	_, err := db.Exec(SQL)
-	return err
+	return applyContext(context.Background(), db)
+}
+
+func applyContext(ctx context.Context, db *sql.DB) error {
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin schema bootstrap: %w", err)
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, SQL); err != nil {
+		return fmt.Errorf("apply schema: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit schema bootstrap: %w", err)
+	}
+	return nil
 }
 
 // Ensure applies the current schema to an empty database, then migrates.
@@ -39,10 +53,8 @@ func EnsureContext(ctx context.Context, db *sql.DB) error {
 	var name string
 	err := db.QueryRowContext(ctx, `SELECT plugin_name FROM plugin_schema WHERE singleton = 1`).Scan(&name)
 	if missingPluginSchema(err) {
-		if applyErr := Apply(db); applyErr != nil {
-			if retry := db.QueryRowContext(ctx, `SELECT plugin_name FROM plugin_schema WHERE singleton = 1`).Scan(&name); retry != nil {
-				return fmt.Errorf("apply schema: %w", applyErr)
-			}
+		if err := applyContext(ctx, db); err != nil {
+			return err
 		}
 	} else if err != nil {
 		return fmt.Errorf("read plugin schema: %w", err)

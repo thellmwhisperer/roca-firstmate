@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/thellmwhisperer/roca-firstmate/schema"
@@ -291,6 +292,32 @@ func TestEnsureMatchesTemplateCatalog(t *testing.T) {
 	}
 }
 
+func TestApplyRollsBackIncompleteBootstrap(t *testing.T) {
+	db, err := sql.Open("sqlite", "file:"+t.TempDir()+"/rollback.db?_pragma=foreign_keys(1)")
+	if err != nil {
+		t.Fatalf("open temp db: %v", err)
+	}
+	t.Cleanup(func() { db.Close() })
+	mustExec(t, db, `CREATE TABLE chart_cache (sentinel INTEGER)`)
+	if err := schema.Apply(db); err == nil {
+		t.Fatal("schema bootstrap succeeded despite a conflicting final table")
+	}
+	if got := tableNames(t, db); !slices.Equal(got, []string{"chart_cache"}) {
+		t.Fatalf("failed bootstrap left schema objects behind: %v", got)
+	}
+	mustExec(t, db, `DROP TABLE chart_cache`)
+	if err := schema.Ensure(db); err != nil {
+		t.Fatalf("retry ensure after rollback: %v", err)
+	}
+	var version int
+	if err := db.QueryRow(`SELECT schema_version FROM plugin_schema WHERE singleton = 1`).Scan(&version); err != nil {
+		t.Fatalf("read plugin schema after retry: %v", err)
+	}
+	if version != 3 {
+		t.Fatalf("schema version after retry = %d, want 3", version)
+	}
+}
+
 func appliedDB(t *testing.T) *sql.DB {
 	t.Helper()
 	db, err := sql.Open("sqlite", "file:"+t.TempDir()+"/applied.db?_pragma=foreign_keys(1)")
@@ -358,7 +385,7 @@ func columnNames(t *testing.T, db *sql.DB, table string) []string {
 
 func dumpCatalog(t *testing.T, db *sql.DB) map[string]any {
 	t.Helper()
-	rows, err := db.Query(`SELECT type, name, tbl_name FROM sqlite_master
+	rows, err := db.Query(`SELECT type, name, tbl_name, sql FROM sqlite_master
 		WHERE name NOT LIKE 'sqlite_%' ORDER BY type, name`)
 	if err != nil {
 		t.Fatalf("list schema objects: %v", err)
@@ -367,11 +394,13 @@ func dumpCatalog(t *testing.T, db *sql.DB) map[string]any {
 	var objects []map[string]string
 	var tables []string
 	for rows.Next() {
-		var objectType, name, tblName string
-		if err := rows.Scan(&objectType, &name, &tblName); err != nil {
+		var objectType, name, tblName, definition string
+		if err := rows.Scan(&objectType, &name, &tblName, &definition); err != nil {
 			t.Fatalf("scan schema object: %v", err)
 		}
-		objects = append(objects, map[string]string{"type": objectType, "name": name, "tbl_name": tblName})
+		objects = append(objects, map[string]string{
+			"type": objectType, "name": name, "tbl_name": tblName, "sql": normalizeSchemaSQL(definition),
+		})
 		if objectType == "table" {
 			tables = append(tables, name)
 		}
@@ -427,6 +456,10 @@ func dumpCatalog(t *testing.T, db *sql.DB) map[string]any {
 		},
 		"row_counts": counts,
 	}
+}
+
+func normalizeSchemaSQL(statement string) string {
+	return strings.Join(strings.Fields(statement), " ")
 }
 
 func catalogValueDiff(want, got any) string {
