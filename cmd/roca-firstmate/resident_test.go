@@ -7,8 +7,13 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/thellmwhisperer/roca-firstmate/internal/nerve"
+	"github.com/thellmwhisperer/roca-firstmate/internal/scribe"
 )
 
 func TestWatchResidentCatchUpDiesWithStdinAndInheritsLease(t *testing.T) {
@@ -174,6 +179,146 @@ func TestRenewFailureStandsDownWatchHome(t *testing.T) {
 	if home.retryAt.Before(now.Add(50 * time.Millisecond)) {
 		t.Fatalf("renew failure did not back off until %s", home.retryAt)
 	}
+}
+
+func TestHeartbeatRenewsOtherHomeDuringBlockedSweepAndFencesLoss(t *testing.T) {
+	path := appliedDBPath(t)
+	db, err := sql.Open("sqlite", "file:"+path+"?_pragma=foreign_keys(1)&_pragma=busy_timeout(5000)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	if _, err := db.Exec(`INSERT INTO homes (home_id, label, kind, recorded_at) VALUES
+		('northwind-harbor', 'Northwind Harbor', 'primary', '2026-03-14T10:00:00Z'),
+		('skiff-secondmate', 'Skiff Secondmate', 'secondmate', '2026-03-14T10:00:00Z')`); err != nil {
+		t.Fatal(err)
+	}
+	firstToken, err := nerve.NewHolderToken()
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondToken, err := nerve.NewHolderToken()
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstUnblock := make(chan struct{})
+	close(firstUnblock)
+	secondUnblock := make(chan struct{})
+	var unblockSecond sync.Once
+	t.Cleanup(func() { unblockSecond.Do(func() { close(secondUnblock) }) })
+	firstIngester := &blockingWatchIngester{
+		root: t.TempDir(), homeID: "northwind-harbor", started: make(chan struct{}, 1), unblock: firstUnblock,
+	}
+	secondIngester := &blockingWatchIngester{
+		root: t.TempDir(), homeID: "skiff-secondmate", started: make(chan struct{}, 1), unblock: secondUnblock,
+	}
+	homes := []*leasedHome{
+		{pair: homePair{ID: "northwind-harbor"}, token: firstToken, seatID: nerve.WatchSeatID("northwind-harbor"), ingester: firstIngester},
+		{pair: homePair{ID: "skiff-secondmate"}, token: secondToken, seatID: nerve.WatchSeatID("skiff-secondmate"), ingester: secondIngester},
+	}
+	lease := 120 * time.Millisecond
+	retry := 20 * time.Millisecond
+	ctx, cancel := context.WithCancel(context.Background())
+	var attempts atomic.Int64
+	heartbeatDone := make(chan struct{})
+	go func() {
+		defer close(heartbeatDone)
+		heartbeatWatchHomes(ctx, db, homes, lease, retry, nil, &attempts)
+	}()
+	t.Cleanup(func() {
+		cancel()
+		<-heartbeatDone
+	})
+	t.Cleanup(func() {
+		for _, home := range homes {
+			standDownWatchHome(context.Background(), db, home, 0, nil, time.Time{})
+		}
+	})
+
+	msgs := make(chan watchMsg, 16)
+	var watches []homeWatch
+	var summaries []scribe.Summary
+	acquired := make(chan error, 1)
+	acquireDone := make(chan struct{})
+	go func() {
+		defer close(acquireDone)
+		acquired <- acquireWatchHomes(
+			ctx, db, homes, 10*time.Millisecond, lease, retry, nil, msgs, &watches, &summaries,
+		)
+	}()
+	t.Cleanup(func() {
+		cancel()
+		unblockSecond.Do(func() { close(secondUnblock) })
+		<-acquireDone
+	})
+	select {
+	case <-secondIngester.started:
+	case <-time.After(3 * time.Second):
+		t.Fatal("second home sweep did not block")
+	}
+	time.Sleep(3 * lease)
+	competitorToken, err := nerve.NewHolderToken()
+	if err != nil {
+		t.Fatal(err)
+	}
+	stolen, _, err := nerve.TryAcquireSeat(context.Background(), db, nerve.SeatConfig{
+		HomeID: "northwind-harbor", HolderToken: competitorToken,
+		Destination: "machine", Now: time.Now().UTC(), Lease: lease,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stolen {
+		t.Fatal("blocked second-home sweep starved the first home's heartbeat")
+	}
+	if _, err := db.Exec(`UPDATE seats SET workspace_fingerprint = ?, lease_until = ? WHERE seat_id = ?`,
+		"foreign-holder", time.Now().UTC().Add(lease).Format(time.RFC3339Nano), nerve.WatchSeatID("skiff-secondmate")); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-acquired:
+		if err == nil {
+			t.Fatal("lease loss during sweep was not reported")
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("lease loss did not cancel the blocked sweep")
+	}
+	if len(watches) != 1 {
+		t.Fatalf("activated watches = %d, want only the fenced first home", len(watches))
+	}
+	homes[1].mu.Lock()
+	secondHolding := homes[1].holding
+	secondSource := homes[1].source
+	homes[1].mu.Unlock()
+	if secondHolding || secondSource != nil {
+		t.Fatalf("lost second home remained active: holding=%v source=%v", secondHolding, secondSource)
+	}
+}
+
+type blockingWatchIngester struct {
+	root    string
+	homeID  string
+	started chan struct{}
+	unblock <-chan struct{}
+}
+
+func (i *blockingWatchIngester) DataRoot() string { return i.root }
+
+func (i *blockingWatchIngester) Backfill(ctx context.Context) (scribe.Summary, error) {
+	select {
+	case i.started <- struct{}{}:
+	default:
+	}
+	select {
+	case <-i.unblock:
+		return scribe.Summary{HomeID: i.homeID}, nil
+	case <-ctx.Done():
+		return scribe.Summary{}, ctx.Err()
+	}
+}
+
+func (i *blockingWatchIngester) IngestPath(context.Context, string) (scribe.Event, error) {
+	return scribe.Event{HomeID: i.homeID}, nil
 }
 
 type closingWatchSource struct {
