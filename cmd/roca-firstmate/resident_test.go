@@ -179,6 +179,64 @@ func TestWatchTakeoverRefreshesCachedFingerprintState(t *testing.T) {
 	}
 }
 
+func TestWatchStandbyDoesNotMutateHomeMetadata(t *testing.T) {
+	path := appliedDBPath(t)
+	db, err := openDatabase(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	homePath := fabricatedHome(t, "northwind-harbor")
+	ownerConfig := scribe.Config{
+		Home: homePath, HomeID: "northwind-harbor", Label: "Owner Label", Kind: "primary", SourceAgent: "firstmate",
+	}
+	if _, err := scribe.New(context.Background(), db, ownerConfig); err != nil {
+		t.Fatal(err)
+	}
+	holderToken, err := nerve.NewHolderToken()
+	if err != nil {
+		t.Fatal(err)
+	}
+	seatID := nerve.WatchSeatID(ownerConfig.HomeID)
+	held, _, err := nerve.TryAcquireSeat(context.Background(), db, nerve.SeatConfig{
+		SeatID: seatID, HomeID: ownerConfig.HomeID, HolderToken: holderToken,
+		Destination: "machine", Now: time.Now().UTC(), Lease: time.Minute,
+	})
+	if err != nil || !held {
+		t.Fatalf("holder lease held=%v err=%v", held, err)
+	}
+	defer nerve.ReleaseSeat(context.Background(), db, seatID, holderToken, time.Now().UTC())
+	standbyToken, err := nerve.NewHolderToken()
+	if err != nil {
+		t.Fatal(err)
+	}
+	standby := &leasedHome{
+		pair: homePair{
+			Path: homePath, ID: ownerConfig.HomeID, Label: "Standby Label", Kind: "secondmate",
+		},
+		token: standbyToken, seatID: seatID, sourceAgent: "firstmate",
+	}
+	msgs := make(chan watchMsg, 1)
+	var watches []homeWatch
+	var summaries []scribe.Summary
+	if err := acquireWatchHomes(
+		context.Background(), db, []*leasedHome{standby}, 20*time.Millisecond,
+		time.Minute, 20*time.Millisecond, nil, msgs, &watches, &summaries,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if len(watches) != 0 {
+		t.Fatalf("standby activated %d watches", len(watches))
+	}
+	var label, kind string
+	if err := db.QueryRow(`SELECT label, kind FROM homes WHERE home_id = ?`, ownerConfig.HomeID).Scan(&label, &kind); err != nil {
+		t.Fatal(err)
+	}
+	if label != ownerConfig.Label || kind != ownerConfig.Kind {
+		t.Fatalf("standby changed home metadata to label=%q kind=%q", label, kind)
+	}
+}
+
 func TestWatchResidentRetriesFailedIngestWithCatchUp(t *testing.T) {
 	clearHomeEnv(t)
 	t.Setenv("ROCA_FIRSTMATE_WATCH_LEASE", "2s")
@@ -328,6 +386,43 @@ func TestWatchResidentRetriesTransientDatabaseLock(t *testing.T) {
 	}
 	locked = false
 	waitWatching(t, proc)
+	if err := proc.stdin.Close(); err != nil {
+		t.Fatal(err)
+	}
+	waitExit(t, proc.done, 3*time.Second)
+}
+
+func TestWatchRetriesDatabaseDisappearanceAfterPreflight(t *testing.T) {
+	clearHomeEnv(t)
+	t.Setenv("ROCA_FIRSTMATE_WATCH_RETRY", "50ms")
+	path := appliedDBPath(t)
+	home := fabricatedHome(t, "northwind-harbor")
+	missing := filepath.Join(t.TempDir(), "disappeared.db")
+	var calls atomic.Int64
+	openDB := func(path string) (*sql.DB, error) {
+		if calls.Add(1) == 1 {
+			return openDatabase(missing)
+		}
+		return openDatabase(path)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	stdinR, stdinW := io.Pipe()
+	defer stdinR.Close()
+	defer stdinW.Close()
+	proc := &watchProc{stdin: stdinW, out: &safeBuffer{}, err: &safeBuffer{}, done: make(chan int, 1)}
+	go func() {
+		proc.done <- runWatchWithDatabase(
+			ctx, path, []homePair{{Path: home, ID: "northwind-harbor"}},
+			scribeFlags{dbPath: path, sourceAgent: "firstmate", asJSON: true, pollInterval: 20 * time.Millisecond},
+			stdinR, proc.out, proc.err, openDB,
+		)
+	}()
+	waitWatchLog(t, path, `"kind":"raise"`, `"kind":"crash-retry"`, `"error":"not-found"`)
+	waitWatching(t, proc)
+	if calls.Load() < 2 {
+		t.Fatalf("database open calls=%d, want retry", calls.Load())
+	}
 	if err := proc.stdin.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -565,10 +660,12 @@ func TestHeartbeatRenewsOtherHomeDuringBlockedSweepAndFencesLoss(t *testing.T) {
 	homes := []*leasedHome{
 		{
 			pair: homePair{ID: "northwind-harbor"}, token: firstToken, seatID: nerve.WatchSeatID("northwind-harbor"),
+			prepared:    true,
 			newIngester: func(context.Context, *sql.DB, *leasedHome) (watchIngester, error) { return firstIngester, nil },
 		},
 		{
 			pair: homePair{ID: "skiff-secondmate"}, token: secondToken, seatID: nerve.WatchSeatID("skiff-secondmate"),
+			prepared:    true,
 			newIngester: func(context.Context, *sql.DB, *leasedHome) (watchIngester, error) { return secondIngester, nil },
 		},
 	}

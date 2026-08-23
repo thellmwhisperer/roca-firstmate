@@ -133,21 +133,14 @@ func normalizeConfig(config Config) (Config, error) {
 	return config, nil
 }
 
-// New validates the configured home, registers its local identity, and loads
-// the shared La Roca unchanged-pass cursor.
-func New(ctx context.Context, db *sql.DB, config Config) (*Ingester, error) {
-	if db == nil {
-		return nil, errors.New("scribe: nil database")
-	}
-	var err error
-	config, err = normalizeConfig(config)
+func resolveConfig(config Config) (Config, string, error) {
+	config, err := normalizeConfig(config)
 	if err != nil {
-		return nil, err
+		return Config{}, "", err
 	}
-
 	home, err := filepath.Abs(config.Home)
 	if err != nil {
-		return nil, fmt.Errorf("scribe: resolve home: %w", err)
+		return Config{}, "", fmt.Errorf("scribe: resolve home: %w", err)
 	}
 	if resolved, resolveErr := filepath.EvalSymlinks(home); resolveErr == nil {
 		home = resolved
@@ -155,10 +148,41 @@ func New(ctx context.Context, db *sql.DB, config Config) (*Ingester, error) {
 	dataRoot := filepath.Join(home, "data")
 	info, err := os.Stat(dataRoot)
 	if err != nil {
-		return nil, fmt.Errorf("scribe: read data directory: %w", err)
+		return Config{}, "", fmt.Errorf("scribe: read data directory: %w", err)
 	}
 	if !info.IsDir() {
-		return nil, fmt.Errorf("scribe: %s is not a directory", dataRoot)
+		return Config{}, "", fmt.Errorf("scribe: %s is not a directory", dataRoot)
+	}
+	return config, dataRoot, nil
+}
+
+// EnsureHome validates a source home and inserts its identity only when absent.
+func EnsureHome(ctx context.Context, db *sql.DB, config Config) error {
+	if db == nil {
+		return errors.New("scribe: nil database")
+	}
+	config, _, err := resolveConfig(config)
+	if err != nil {
+		return err
+	}
+	now := config.Now().UTC().Format(time.RFC3339Nano)
+	if _, err := db.ExecContext(ctx, `INSERT INTO homes (home_id, label, kind, recorded_at)
+		VALUES (?, ?, ?, ?)
+		ON CONFLICT(home_id) DO NOTHING`, config.HomeID, config.Label, config.Kind, now); err != nil {
+		return fmt.Errorf("scribe: ensure home: %w", err)
+	}
+	return nil
+}
+
+// New validates the configured home, registers its local identity, and loads
+// the shared La Roca unchanged-pass cursor.
+func New(ctx context.Context, db *sql.DB, config Config) (*Ingester, error) {
+	if db == nil {
+		return nil, errors.New("scribe: nil database")
+	}
+	config, dataRoot, err := resolveConfig(config)
+	if err != nil {
+		return nil, err
 	}
 
 	now := config.Now().UTC().Format(time.RFC3339Nano)
