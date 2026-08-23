@@ -227,6 +227,9 @@ func (i *Ingester) DataRoot() string { return i.dataRoot }
 func (i *Ingester) Backfill(ctx context.Context) (Summary, error) {
 	result := Summary{Status: "mirrored", HomeID: i.config.HomeID, Help: HelpLines()}
 	err := filepath.WalkDir(i.dataRoot, func(path string, entry fs.DirEntry, walkErr error) error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		if walkErr != nil {
 			return walkErr
 		}
@@ -305,6 +308,9 @@ func (i *Ingester) IngestPath(ctx context.Context, path string) (Event, error) {
 	}
 
 	cursorPath := "firstmate:" + i.config.HomeID + "/data/" + rel
+	if err := ctx.Err(); err != nil {
+		return Event{}, err
+	}
 	fingerprint, err := incrementality.TargetFingerprint(incrementality.Target{
 		Path: abs, Kind: "firstmate_markdown", SourceAgent: i.config.SourceAgent,
 		Project: i.config.HomeID, ParserVersion: parserVersion,

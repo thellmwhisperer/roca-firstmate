@@ -3,6 +3,7 @@ package scribe_test
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -52,6 +53,25 @@ func TestBackfillMirrorsEveryFabricatedMarkdownFamilyAndIsIncremental(t *testing
 		t.Fatalf("unchanged safety scan = %+v", second)
 	}
 	assertCount(t, db, "wakeups", 13)
+}
+
+func TestBackfillStopsBeforeFingerprintingWhenCanceled(t *testing.T) {
+	home := copiedFabricatedHome(t)
+	db := appliedDB(t)
+	ingester, err := scribe.New(context.Background(), db, scribe.Config{
+		Home: home, HomeID: "northwind-harbor", Kind: "primary",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ingester.Backfill(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := ingester.Backfill(ctx); !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled backfill error=%v", err)
+	}
 }
 
 func TestFileEventCreatesVersionThenTriggerCreatesWakeup(t *testing.T) {

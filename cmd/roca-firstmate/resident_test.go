@@ -187,16 +187,20 @@ func TestWatchTakeoverRefreshesCachedFingerprintState(t *testing.T) {
 		pair: pair, token: standbyToken, seatID: seatID, sourceAgent: "firstmate",
 	}
 	msgs := make(chan watchMsg, 16)
-	var watches []homeWatch
-	var summaries []scribe.Summary
+	activations := make(chan watchActivation, 1)
 	if err := acquireWatchHomes(
 		context.Background(), db, []*leasedHome{standby}, 20*time.Millisecond,
-		time.Minute, 20*time.Millisecond, nil, msgs, &watches, &summaries,
+		time.Minute, 20*time.Millisecond, nil, msgs, activations,
 	); err != nil {
 		t.Fatal(err)
 	}
-	if len(watches) != 0 || !standby.prepared {
-		t.Fatalf("standby preparation watches=%d prepared=%v", len(watches), standby.prepared)
+	select {
+	case activation := <-activations:
+		t.Fatalf("standby unexpectedly activated: %+v", activation)
+	default:
+	}
+	if !standby.prepared {
+		t.Fatal("standby home was not prepared")
 	}
 	if err := os.WriteFile(captain, []byte("# intervening holder content\n"), 0o600); err != nil {
 		t.Fatal(err)
@@ -211,16 +215,15 @@ func TestWatchTakeoverRefreshesCachedFingerprintState(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer standDownWatchHome(context.Background(), db, standby, 0, nil, time.Time{})
-	watches = nil
-	summaries = nil
 	if err := acquireWatchHomes(
 		context.Background(), db, []*leasedHome{standby}, 20*time.Millisecond,
-		time.Minute, 20*time.Millisecond, nil, msgs, &watches, &summaries,
+		time.Minute, 20*time.Millisecond, nil, msgs, activations,
 	); err != nil {
 		t.Fatal(err)
 	}
-	if len(watches) != 1 || len(summaries) != 1 || summaries[0].Inserted != 1 {
-		t.Fatalf("takeover watches=%d summaries=%+v", len(watches), summaries)
+	activation := waitWatchActivation(t, activations)
+	if activation.err != nil || activation.watch.source == nil || activation.summary.Inserted != 1 {
+		t.Fatalf("takeover activation=%+v", activation)
 	}
 	if got := currentVersions(t, path, pair.ID, "captain.md"); got != 3 {
 		t.Fatalf("takeover versions=%d, want 3", got)
@@ -265,16 +268,17 @@ func TestWatchStandbyDoesNotMutateHomeMetadata(t *testing.T) {
 		token: standbyToken, seatID: seatID, sourceAgent: "firstmate",
 	}
 	msgs := make(chan watchMsg, 1)
-	var watches []homeWatch
-	var summaries []scribe.Summary
+	activations := make(chan watchActivation, 1)
 	if err := acquireWatchHomes(
 		context.Background(), db, []*leasedHome{standby}, 20*time.Millisecond,
-		time.Minute, 20*time.Millisecond, nil, msgs, &watches, &summaries,
+		time.Minute, 20*time.Millisecond, nil, msgs, activations,
 	); err != nil {
 		t.Fatal(err)
 	}
-	if len(watches) != 0 {
-		t.Fatalf("standby activated %d watches", len(watches))
+	select {
+	case activation := <-activations:
+		t.Fatalf("standby unexpectedly activated: %+v", activation)
+	default:
 	}
 	var label, kind string
 	if err := db.QueryRow(`SELECT label, kind FROM homes WHERE home_id = ?`, ownerConfig.HomeID).Scan(&label, &kind); err != nil {
@@ -594,7 +598,7 @@ func TestWatchRetriesDatabaseDisappearanceAfterPreflight(t *testing.T) {
 	home := fabricatedHome(t, "northwind-harbor")
 	missing := filepath.Join(t.TempDir(), "disappeared.db")
 	var calls atomic.Int64
-	openDB := func(path string) (*sql.DB, error) {
+	openDB := func(_ context.Context, path string) (*sql.DB, error) {
 		if calls.Add(1) == 1 {
 			return openDatabase(missing)
 		}
@@ -622,6 +626,38 @@ func TestWatchRetriesDatabaseDisappearanceAfterPreflight(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitExit(t, proc.done, 3*time.Second)
+}
+
+func TestWatchStartupStopsWhenStdinCloses(t *testing.T) {
+	clearHomeEnv(t)
+	path := appliedDBPath(t)
+	home := fabricatedHome(t, "northwind-harbor")
+	started := make(chan struct{})
+	openDB := func(ctx context.Context, _ string) (*sql.DB, error) {
+		close(started)
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
+	stdinR, stdinW := io.Pipe()
+	defer stdinR.Close()
+	defer stdinW.Close()
+	proc := &watchProc{stdin: stdinW, out: &safeBuffer{}, err: &safeBuffer{}, done: make(chan int, 1)}
+	go func() {
+		proc.done <- runWatchWithDatabase(
+			context.Background(), path, []homePair{{Path: home, ID: "northwind-harbor"}},
+			scribeFlags{dbPath: path, sourceAgent: "firstmate", asJSON: true, pollInterval: 20 * time.Millisecond},
+			stdinR, proc.out, proc.err, openDB,
+		)
+	}()
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("database open did not start")
+	}
+	if err := proc.stdin.Close(); err != nil {
+		t.Fatal(err)
+	}
+	waitExit(t, proc.done, time.Second)
 }
 
 func TestWatchResidentReportsTelemetryFailureOnce(t *testing.T) {
@@ -973,20 +1009,15 @@ func TestHeartbeatRenewsOtherHomeDuringBlockedSweepAndFencesLoss(t *testing.T) {
 	})
 
 	msgs := make(chan watchMsg, 16)
-	var watches []homeWatch
-	var summaries []scribe.Summary
-	acquired := make(chan error, 1)
-	acquireDone := make(chan struct{})
-	go func() {
-		defer close(acquireDone)
-		acquired <- acquireWatchHomes(
-			ctx, db, homes, 10*time.Millisecond, lease, retry, nil, msgs, &watches, &summaries,
-		)
-	}()
+	activations := make(chan watchActivation, len(homes))
+	if err := acquireWatchHomes(
+		ctx, db, homes, 10*time.Millisecond, lease, retry, nil, msgs, activations,
+	); err != nil {
+		t.Fatal(err)
+	}
 	t.Cleanup(func() {
 		cancel()
 		unblockSecond.Do(func() { close(secondUnblock) })
-		<-acquireDone
 	})
 	select {
 	case <-secondIngester.started:
@@ -1012,16 +1043,17 @@ func TestHeartbeatRenewsOtherHomeDuringBlockedSweepAndFencesLoss(t *testing.T) {
 		"foreign-holder", time.Now().UTC().Add(lease).Format(time.RFC3339Nano), nerve.WatchSeatID("skiff-secondmate")); err != nil {
 		t.Fatal(err)
 	}
-	select {
-	case err := <-acquired:
-		if err == nil {
-			t.Fatal("lease loss during sweep was not reported")
+	var successful, failed int
+	for successful+failed < len(homes) {
+		activation := waitWatchActivation(t, activations)
+		if activation.err != nil {
+			failed++
+		} else {
+			successful++
 		}
-	case <-time.After(3 * time.Second):
-		t.Fatal("lease loss did not cancel the blocked sweep")
 	}
-	if len(watches) != 1 {
-		t.Fatalf("activated watches = %d, want only the fenced first home", len(watches))
+	if successful != 1 || failed != 1 {
+		t.Fatalf("activations successful=%d failed=%d", successful, failed)
 	}
 	homes[1].mu.Lock()
 	secondHolding := homes[1].holding
@@ -1029,6 +1061,80 @@ func TestHeartbeatRenewsOtherHomeDuringBlockedSweepAndFencesLoss(t *testing.T) {
 	homes[1].mu.Unlock()
 	if secondHolding || secondSource != nil {
 		t.Fatalf("lost second home remained active: holding=%v source=%v", secondHolding, secondSource)
+	}
+}
+
+func TestMultiHomeAcquisitionContinuesDuringBlockedSweep(t *testing.T) {
+	path := appliedDBPath(t)
+	db, err := sql.Open("sqlite", "file:"+path+"?_pragma=foreign_keys(1)&_pragma=busy_timeout(5000)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if _, err := db.Exec(`INSERT INTO homes (home_id, label, kind, recorded_at) VALUES
+		('northwind-harbor', 'Northwind Harbor', 'primary', '2026-03-14T10:00:00Z'),
+		('skiff-secondmate', 'Skiff Secondmate', 'secondmate', '2026-03-14T10:00:00Z')`); err != nil {
+		t.Fatal(err)
+	}
+	blocked := make(chan struct{})
+	ready := make(chan struct{})
+	close(ready)
+	first := &blockingWatchIngester{
+		root: t.TempDir(), homeID: "northwind-harbor", started: make(chan struct{}, 1), unblock: blocked,
+	}
+	second := &blockingWatchIngester{
+		root: t.TempDir(), homeID: "skiff-secondmate", started: make(chan struct{}, 1), unblock: ready,
+	}
+	firstToken, err := nerve.NewHolderToken()
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondToken, err := nerve.NewHolderToken()
+	if err != nil {
+		t.Fatal(err)
+	}
+	homes := []*leasedHome{
+		{
+			pair: homePair{ID: "northwind-harbor"}, token: firstToken, seatID: nerve.WatchSeatID("northwind-harbor"), prepared: true,
+			newIngester: func(context.Context, *sql.DB, *leasedHome) (watchIngester, error) { return first, nil },
+		},
+		{
+			pair: homePair{ID: "skiff-secondmate"}, token: secondToken, seatID: nerve.WatchSeatID("skiff-secondmate"), prepared: true,
+			newIngester: func(context.Context, *sql.DB, *leasedHome) (watchIngester, error) { return second, nil },
+		},
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	defer func() {
+		close(blocked)
+		for _, home := range homes {
+			standDownWatchHome(context.Background(), db, home, 0, nil, time.Time{})
+		}
+	}()
+	activations := make(chan watchActivation, len(homes))
+	acquired := make(chan error, 1)
+	go func() {
+		acquired <- acquireWatchHomes(
+			ctx, db, homes, 10*time.Millisecond, time.Minute, 20*time.Millisecond,
+			nil, make(chan watchMsg, 16), activations,
+		)
+	}()
+	select {
+	case err := <-acquired:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("seat acquisition blocked behind a home sweep")
+	}
+	select {
+	case <-first.started:
+	case <-time.After(time.Second):
+		t.Fatal("first home sweep did not block")
+	}
+	activation := waitWatchActivation(t, activations)
+	if activation.err != nil || activation.summary.HomeID != "skiff-secondmate" {
+		t.Fatalf("second home activation=%+v", activation)
 	}
 }
 
@@ -1191,6 +1297,17 @@ func waitWatching(t *testing.T, proc *watchProc) {
 		time.Sleep(20 * time.Millisecond)
 	}
 	t.Fatalf("watch did not start stdout %s stderr %s", proc.out.String(), proc.err.String())
+}
+
+func waitWatchActivation(t *testing.T, activations <-chan watchActivation) watchActivation {
+	t.Helper()
+	select {
+	case activation := <-activations:
+		return activation
+	case <-time.After(3 * time.Second):
+		t.Fatal("watch activation did not finish")
+		return watchActivation{}
+	}
 }
 
 func waitExit(t *testing.T, done <-chan int, timeout time.Duration) {
