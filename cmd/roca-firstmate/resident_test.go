@@ -148,6 +148,20 @@ func TestWatchResidentRetriesRuntimeInitialization(t *testing.T) {
 	}
 	proc := startWatch(t, path, home, "late-home")
 	waitWatchLog(t, path, `"kind":"raise"`, `"kind":"crash-retry"`)
+	matches, err := filepath.Glob(filepath.Join(filepath.Dir(path), "logs", "watch-*.jsonl"))
+	if err != nil || len(matches) == 0 {
+		t.Fatalf("watch telemetry files=%v err=%v", matches, err)
+	}
+	body, err := os.ReadFile(matches[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(body), home) || strings.Contains(string(body), path) {
+		t.Fatalf("watch telemetry leaked a configured path: %s", body)
+	}
+	if !strings.Contains(string(body), `"error":"not-found"`) {
+		t.Fatalf("watch telemetry did not record a bounded error code: %s", body)
+	}
 	select {
 	case code := <-proc.done:
 		t.Fatalf("watch exited %d instead of retrying initialization", code)
@@ -165,6 +179,108 @@ func TestWatchResidentRetriesRuntimeInitialization(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitExit(t, proc.done, 3*time.Second)
+}
+
+func TestWatchResidentRetriesDatabaseOpen(t *testing.T) {
+	clearHomeEnv(t)
+	t.Setenv("ROCA_FIRSTMATE_WATCH_RETRY", "50ms")
+	source := appliedDBPath(t)
+	dbBytes, err := os.ReadFile(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(t.TempDir(), "firstmate.db")
+	home := fabricatedHome(t, "northwind-harbor")
+	proc := startWatch(t, target, home, "northwind-harbor")
+	waitWatchLog(t, target, `"kind":"raise"`, `"kind":"crash-retry"`, `"error":"not-found"`)
+	select {
+	case code := <-proc.done:
+		t.Fatalf("watch exited %d instead of retrying database open", code)
+	default:
+	}
+	if err := os.WriteFile(target, dbBytes, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	waitWatching(t, proc)
+	if err := proc.stdin.Close(); err != nil {
+		t.Fatal(err)
+	}
+	waitExit(t, proc.done, 3*time.Second)
+}
+
+func TestWatchResidentReportsTelemetryFailureOnce(t *testing.T) {
+	clearHomeEnv(t)
+	path := appliedDBPath(t)
+	if err := os.WriteFile(filepath.Join(filepath.Dir(path), "logs"), []byte("blocked"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	home := fabricatedHome(t, "northwind-harbor")
+	proc := startWatch(t, path, home, "northwind-harbor")
+	waitWatching(t, proc)
+	if err := proc.stdin.Close(); err != nil {
+		t.Fatal(err)
+	}
+	waitExit(t, proc.done, 3*time.Second)
+	diagnostic := "warning: watch telemetry unavailable"
+	if got := strings.Count(proc.err.String(), diagnostic); got != 1 {
+		t.Fatalf("telemetry diagnostics = %d, want 1: %q", got, proc.err.String())
+	}
+	if strings.Contains(proc.err.String(), path) || strings.Contains(proc.err.String(), home) {
+		t.Fatalf("telemetry diagnostic leaked configured paths: %q", proc.err.String())
+	}
+}
+
+func TestWatchIngesterRejectsStaleHolderCommit(t *testing.T) {
+	path := appliedDBPath(t)
+	db, err := openDatabase(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	homePath := fabricatedHome(t, "northwind-harbor")
+	token, err := nerve.NewHolderToken()
+	if err != nil {
+		t.Fatal(err)
+	}
+	home := &leasedHome{
+		pair:  homePair{Path: homePath, ID: "northwind-harbor"},
+		token: token, seatID: nerve.WatchSeatID("northwind-harbor"), sourceAgent: "firstmate",
+	}
+	ingester, err := newWatchIngester(context.Background(), db, home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	held, _, err := nerve.TryAcquireSeat(context.Background(), db, nerve.SeatConfig{
+		HomeID: home.pair.ID, HolderToken: token, Destination: "machine", Now: now, Lease: 2 * time.Second,
+	})
+	if err != nil || !held {
+		t.Fatalf("initial lease held=%v err=%v", held, err)
+	}
+	if _, err := ingester.Backfill(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	foreign, err := nerve.NewHolderToken()
+	if err != nil {
+		t.Fatal(err)
+	}
+	stolen, _, err := nerve.TryAcquireSeat(context.Background(), db, nerve.SeatConfig{
+		HomeID: home.pair.ID, HolderToken: foreign, Destination: "machine",
+		Now: now.Add(3 * time.Second), Lease: 2 * time.Second,
+	})
+	if err != nil || !stolen {
+		t.Fatalf("expired lease takeover held=%v err=%v", stolen, err)
+	}
+	captain := filepath.Join(homePath, "data", "captain.md")
+	if err := os.WriteFile(captain, []byte("# stale holder write\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ingester.IngestPath(context.Background(), captain); err == nil {
+		t.Fatal("stale holder committed an ingest")
+	}
+	if got := currentVersions(t, path, home.pair.ID, "captain.md"); got != 1 {
+		t.Fatalf("stale holder left %d committed versions, want 1", got)
+	}
 }
 
 func TestWatchRejectsInvalidIdentityBeforeRaise(t *testing.T) {

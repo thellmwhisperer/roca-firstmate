@@ -120,34 +120,34 @@ func runScribe(ctx context.Context, args []string, stdin io.Reader, stdout, stde
 		usage(stderr)
 		return exitUsage
 	}
+	if continuous {
+		return runWatch(ctx, values.dbPath, req.Pairs, values, stdin, stdout, stderr)
+	}
 	db, err := openDatabase(values.dbPath)
 	if err != nil {
 		printScribeError(stdout, err)
 		return exitError
 	}
 	defer db.Close()
-	if !continuous {
-		summaries := make([]scribe.Summary, 0, len(req.Pairs))
-		for _, pair := range req.Pairs {
-			ingester, err := newIngester(ctx, db, pair, values.sourceAgent)
-			if err != nil {
-				printScribeError(stdout, err)
-				return exitError
-			}
-			summary, err := ingester.Backfill(ctx)
-			if err != nil {
-				printScribeError(stdout, err)
-				return exitError
-			}
-			summaries = append(summaries, summary)
-		}
-		if err := renderScribeSummaries(stdout, values.asJSON, summaries); err != nil {
+	summaries := make([]scribe.Summary, 0, len(req.Pairs))
+	for _, pair := range req.Pairs {
+		ingester, err := newIngester(ctx, db, pair, values.sourceAgent)
+		if err != nil {
 			printScribeError(stdout, err)
 			return exitError
 		}
-		return exitOK
+		summary, err := ingester.Backfill(ctx)
+		if err != nil {
+			printScribeError(stdout, err)
+			return exitError
+		}
+		summaries = append(summaries, summary)
 	}
-	return runWatch(ctx, db, req.Pairs, values, stdin, stdout)
+	if err := renderScribeSummaries(stdout, values.asJSON, summaries); err != nil {
+		printScribeError(stdout, err)
+		return exitError
+	}
+	return exitOK
 }
 
 func openDatabase(path string) (*sql.DB, error) {

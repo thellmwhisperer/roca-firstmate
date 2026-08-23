@@ -1,6 +1,6 @@
 /*
 *
-@overview Deterministic Nerve routing for firstmate.db. ~540 lines, 12 public symbols.
+@overview Deterministic Nerve routing for firstmate.db. ~545 lines, 18 public symbols.
 
 		READING GUIDE
 		-------------
@@ -24,6 +24,7 @@
 		NewHolderToken()   Opaque single-flight token, never a path
 		RegisterSeat()     Create or refresh a seat lease
 		TryAcquireSeat()   Take a watch lease only when free or expired
+		FenceSeat()        Confirm watch ownership inside an ingest transaction
 		RenewSeat()        Heartbeat a watch lease this holder already owns
 		ReleaseSeat()      Drop a watch lease so the next candidate can inherit
 		LastHandoff()      Read the latest mirrored handoff
@@ -36,7 +37,7 @@
 		---------
 		heartbeat, homeIDFilter, silenceClock, drainOrphans, drainDestination, claimNext, nextGeneration
 
-@exports SeatConfig, Seat, Handoff, Wakeup, TickResult, WorkspaceSeatID, WatchSeatID, NewHolderToken, RegisterSeat, TryAcquireSeat, RenewSeat, ReleaseSeat, LastHandoff, Follow, Drain, DrainMatching, Tick
+@exports SeatConfig, Seat, Handoff, Wakeup, TickResult, WorkspaceSeatID, WatchSeatID, NewHolderToken, RegisterSeat, TryAcquireSeat, FenceSeat, RenewSeat, ReleaseSeat, LastHandoff, Follow, Drain, DrainMatching, Tick
 @deps database/sql queue state; encoding/json one-line envelopes; filesystem watcher in wal_*.go
 */
 package nerve

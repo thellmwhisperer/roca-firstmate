@@ -51,6 +51,7 @@ type Config struct {
 	Kind        string
 	SourceAgent string
 	Now         func() time.Time
+	CommitFence func(context.Context, *sql.Tx) error
 }
 
 // Summary is the bounded result of one total backfill or safety scan.
@@ -310,6 +311,9 @@ func (i *Ingester) IngestPath(ctx context.Context, path string) (Event, error) {
 		if err := i.recordState(ctx, tx, cursorPath, fingerprint, rel, class, version, content); err != nil {
 			return Event{}, err
 		}
+		if err := i.fenceCommit(ctx, tx, rel); err != nil {
+			return Event{}, err
+		}
 		if err := tx.Commit(); err != nil {
 			return Event{}, fmt.Errorf("scribe: commit unchanged %s: %w", rel, err)
 		}
@@ -362,6 +366,9 @@ func (i *Ingester) IngestPath(ctx context.Context, path string) (Event, error) {
 	if err := i.recordState(ctx, tx, cursorPath, fingerprint, rel, class, version, content); err != nil {
 		return Event{}, err
 	}
+	if err := i.fenceCommit(ctx, tx, rel); err != nil {
+		return Event{}, err
+	}
 	if err := tx.Commit(); err != nil {
 		return Event{}, fmt.Errorf("scribe: commit %s: %w", rel, err)
 	}
@@ -371,6 +378,16 @@ func (i *Ingester) IngestPath(ctx context.Context, path string) (Event, error) {
 	event.Inserted = true
 	event.Wakeups = wakeups
 	return event, nil
+}
+
+func (i *Ingester) fenceCommit(ctx context.Context, tx *sql.Tx, rel string) error {
+	if i.config.CommitFence == nil {
+		return nil
+	}
+	if err := i.config.CommitFence(ctx, tx); err != nil {
+		return fmt.Errorf("scribe: commit fence for %s: %w", rel, err)
+	}
+	return nil
 }
 
 func (i *Ingester) recordState(ctx context.Context, tx *sql.Tx, cursorPath, fingerprint,
