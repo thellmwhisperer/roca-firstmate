@@ -13,7 +13,7 @@ La Roca the product stays untouched. Firstmate is mirrored, not modified. Tests 
 - Every rewrite becomes a new version row, with `is_current = 1` on the latest file.
 - Distiller is deleted. The chart is an on-demand get-or-create with a database watermark.
 - Nerve is deterministic and inference-free. Destinations are `captain`, `companion`, and `machine`; mobile is later.
-- There is no default daemon and no KeepAlive service. `attach` and `follow` are foreground subscriptions. `tick` is an ephemeral cron process.
+- There is no default daemon and no KeepAlive service. `attach` and `follow` are foreground subscriptions. `tick` is an ephemeral cron process. `watch` is the session-owned ear: a parent that owns stdin/stdout (no port, no pid file) can raise it as a child that dies when the session ends. Seat leases keep a single holder per home.
 - `state/` telemetry is outside v1. The reserved later tables remain free.
 - Vector retrieval is embeddings-only over the five family `content` columns (home prose plus task text). The plugin never declares ingest.
 
@@ -44,9 +44,14 @@ roca-firstmate watch \
   --home '<fabricated primary home>' --home-id northwind-harbor --kind primary \
   --home '<fabricated second-mate home>' --home-id skiff-secondmate --kind secondmate \
   --db firstmate.db
+roca-firstmate place
 ```
 
-`watch` opens one recursive FSEvents subscription per home on macOS when cgo is available, and polling elsewhere. `scribe` ingests each home in sequence. Nerve adds ingest-on-read: `attach`, `chart`, `follow`, and `tick` run Scribe's fingerprint sweep for each supplied pair before answering. For `chart` and `follow`, unpaired `--home-id` values filter already-registered homes, while omitting the filter reads every registered home. Supplying paired `--home PATH --home-id ID` values refreshes those homes but does not filter output.
+`watch` opens one recursive FSEvents subscription per home on macOS when cgo is available, and polling elsewhere. On rise it fingerprint-sweeps first so writes made while nobody listened are absorbed, then it stays on live events. Concurrent `watch` processes compete for the existing `seats` lease of `watch-<home-id>` (destination `machine`): the holder watches, the others stand down, and a released or expired lease is inherited on the next retry. `scribe` ingests each home in sequence. Nerve adds ingest-on-read: `attach`, `chart`, `follow`, and `tick` run Scribe's fingerprint sweep for each supplied pair before answering. For `chart` and `follow`, unpaired `--home-id` values filter already-registered homes, while omitting the filter reads every registered home. Supplying paired `--home PATH --home-id ID` values refreshes those homes but does not filter output.
+
+Watch telemetry is JSONL next to `firstmate.db` (`logs/watch-YYYY-MM-DD.jsonl`), never a database table. Lines record raise, lease-acquired, lease-lost, sweep counts, and crash-retry. A crash inside the child is logged and retried with backoff; it does not require a daemon.
+
+`place` copies this independently versioned executable into the plugin directory (default: the directory of `ROCA_FIRSTMATE_DB`) as `roca-firstmate`, so a session parent resolves it from that directory instead of PATH luck. The installer payload stays `plugin.json` and `firstmate.db`. This plugin does not add unknown manifest fields: current La Roca rejects them. The watch child is ready for a generic session-companion declaration any plugin could name; that kernel seam, if added, must not mention firstmate.
 
 ## Attach: the default gesture
 
@@ -129,6 +134,7 @@ export ROCA_FIRSTMATE_DB="$(
   roca plugin install thellmwhisperer/roca-firstmate --yes --json |
   jq -r '.directory + "/firstmate.db"'
 )"
+roca-firstmate place
 ```
 
 The experimental plugin surface must be enabled in La Roca. `--yes` accepts the displayed DATA-ONLY risk for non-interactive JSON installation. Because the manifest declares `custody: true`, uninstall archives the database instead of deleting operator-owned mirror history.
@@ -151,12 +157,13 @@ make sync-db
 plugin.json              # identity, database, semantic, and vector declarations
 firstmate.db             # empty schema, operator-owned after installation
 schema/schema.sql        # source of truth for firstmate.db
-cmd/roca-firstmate/      # attach, follow, tick, chart, and Scribe verbs
-internal/nerve/          # WAL subscription, seats, silence clock, orphan drain
+cmd/roca-firstmate/      # attach, follow, tick, chart, place, and Scribe verbs
+internal/nerve/          # WAL subscription, seats, watch leases, silence clock, orphan drain
 internal/scribe/         # total versioned Markdown mirror
 internal/watch/          # Scribe FSEvents and polling backends
+internal/watchlog/       # JSONL telemetry for the session-owned watcher
 skills/dresser/SKILL.md  # companion operating skill and adapter recipes
 testdata/homes/          # fabricated homes only
 ```
 
-Mobile routing, `state/` telemetry, and an optional resident daemon remain additive later work. None blocks Nerve v1. Do not add Distiller or edit the La Roca product repository from this example.
+Mobile routing, `state/` telemetry tables, and an optional resident daemon remain additive later work. Session-owned `watch` is not a daemon. None blocks Nerve v1. Do not add Distiller or edit the La Roca product repository from this example.
