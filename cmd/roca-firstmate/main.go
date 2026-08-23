@@ -29,6 +29,13 @@ const (
 	exitUsage = 2
 )
 
+type databasePathError struct {
+	err error
+}
+
+func (e *databasePathError) Error() string { return e.err.Error() }
+func (e *databasePathError) Unwrap() error { return e.err }
+
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -177,18 +184,22 @@ func openDatabase(path string) (*sql.DB, error) {
 func validateDatabasePath(path string) error {
 	info, err := os.Stat(path)
 	if err != nil {
-		return err
+		return &databasePathError{err: err}
 	}
 	if !info.Mode().IsRegular() {
-		return fmt.Errorf("firstmate.db must be a regular file")
+		return &databasePathError{err: fmt.Errorf("firstmate.db must be a regular file")}
 	}
 	if _, err := filepath.Abs(path); err != nil {
-		return fmt.Errorf("resolve firstmate.db: %w", err)
+		return &databasePathError{err: fmt.Errorf("resolve firstmate.db: %w", err)}
 	}
 	return nil
 }
 
 func retryableDatabaseOpenError(err error) bool {
+	var pathErr *databasePathError
+	if errors.As(err, &pathErr) {
+		return true
+	}
 	var sqliteErr *sqlite.Error
 	if !errors.As(err, &sqliteErr) {
 		return false

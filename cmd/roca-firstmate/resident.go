@@ -71,6 +71,13 @@ func runWatch(
 	ctx context.Context, dbPath string, pairs []homePair, values scribeFlags,
 	stdin io.Reader, stdout, stderr io.Writer,
 ) int {
+	return runWatchWithDatabase(ctx, dbPath, pairs, values, stdin, stdout, stderr, openDatabase)
+}
+
+func runWatchWithDatabase(
+	ctx context.Context, dbPath string, pairs []homePair, values scribeFlags,
+	stdin io.Reader, stdout, stderr io.Writer, openDB func(string) (*sql.DB, error),
+) int {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	go closeOnEOF(ctx, cancel, stdin)
@@ -108,7 +115,7 @@ func runWatch(
 	var attempts atomic.Int64
 	var db *sql.DB
 	for db == nil {
-		opened, err := openDatabase(dbPath)
+		opened, err := openDB(dbPath)
 		if err == nil {
 			db = opened
 			break
@@ -234,7 +241,10 @@ func acquireWatchHomes(
 			}
 		}
 		if !prepared {
-			_, err := factory(ctx, db, home)
+			err := scribe.EnsureHome(ctx, db, scribe.Config{
+				Home: home.pair.Path, HomeID: home.pair.ID, Label: home.pair.Label,
+				Kind: home.pair.Kind, SourceAgent: home.sourceAgent,
+			})
 			if err != nil {
 				home.mu.Lock()
 				home.retryAt = time.Now().UTC().Add(retry)
