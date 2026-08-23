@@ -184,7 +184,7 @@
           },
           {
             "name": "seats",
-            "description": "Attached workspace subscriptions. Workspaces are stored only as opaque fingerprints; leases and silence generations let an ephemeral tick recover without in-memory state.",
+            "description": "Attached workspace subscriptions and resident watch holders. Workspace subscriptions and watch leases use only opaque fingerprints or holder tokens; leases and silence generations let ownership and an ephemeral tick recover without in-memory state.",
             "questions": [
               "Which firstmate workspace seats are attached?",
               "Which seat subscriptions are silent or expired?"
