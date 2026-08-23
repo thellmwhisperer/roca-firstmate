@@ -8,9 +8,10 @@ import (
 	"path/filepath"
 	"reflect"
 	"slices"
-	"strings"
+	"sync"
 	"testing"
 
+	"github.com/thellmwhisperer/roca-firstmate/internal/testcatalog"
 	"github.com/thellmwhisperer/roca-firstmate/schema"
 	_ "modernc.org/sqlite"
 )
@@ -318,6 +319,51 @@ func TestApplyRollsBackIncompleteBootstrap(t *testing.T) {
 	}
 }
 
+func TestEnsureSerializesConcurrentBootstrap(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "concurrent.db")
+	const workers = 16
+	dbs := make([]*sql.DB, workers)
+	for i := range dbs {
+		db, err := sql.Open("sqlite", "file:"+path+"?_pragma=foreign_keys(1)&_pragma=busy_timeout(5000)&_txlock=immediate")
+		if err != nil {
+			t.Fatalf("open worker %d: %v", i, err)
+		}
+		dbs[i] = db
+		t.Cleanup(func() { db.Close() })
+		if err := db.Ping(); err != nil {
+			t.Fatalf("ping worker %d: %v", i, err)
+		}
+	}
+
+	start := make(chan struct{})
+	errs := make(chan error, workers)
+	var group sync.WaitGroup
+	for _, db := range dbs {
+		group.Add(1)
+		go func() {
+			defer group.Done()
+			<-start
+			errs <- schema.Ensure(db)
+		}()
+	}
+	close(start)
+	group.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("concurrent ensure: %v", err)
+		}
+	}
+
+	var version int
+	if err := dbs[0].QueryRow(`SELECT schema_version FROM plugin_schema WHERE singleton = 1`).Scan(&version); err != nil {
+		t.Fatalf("read plugin schema: %v", err)
+	}
+	if version != 3 {
+		t.Fatalf("schema version = %d, want 3", version)
+	}
+}
+
 func appliedDB(t *testing.T) *sql.DB {
 	t.Helper()
 	db, err := sql.Open("sqlite", "file:"+t.TempDir()+"/applied.db?_pragma=foreign_keys(1)")
@@ -399,7 +445,7 @@ func dumpCatalog(t *testing.T, db *sql.DB) map[string]any {
 			t.Fatalf("scan schema object: %v", err)
 		}
 		objects = append(objects, map[string]string{
-			"type": objectType, "name": name, "tbl_name": tblName, "sql": normalizeSchemaSQL(definition),
+			"type": objectType, "name": name, "tbl_name": tblName, "sql": testcatalog.NormalizeSQL(definition),
 		})
 		if objectType == "table" {
 			tables = append(tables, name)
@@ -456,10 +502,6 @@ func dumpCatalog(t *testing.T, db *sql.DB) map[string]any {
 		},
 		"row_counts": counts,
 	}
-}
-
-func normalizeSchemaSQL(statement string) string {
-	return strings.Join(strings.Fields(statement), " ")
 }
 
 func catalogValueDiff(want, got any) string {
