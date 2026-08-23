@@ -568,7 +568,7 @@ func boundedOneLine(value string, limit int) string {
 }
 
 type homeWatch struct {
-	ingester *scribe.Ingester
+	ingester watchIngester
 	source   filewatch.Source
 }
 
