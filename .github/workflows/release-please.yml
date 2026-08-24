@@ -1,0 +1,76 @@
+name: release-please
+
+# release-please owns the release PR / version / changelog automation.
+# It reads conventional commits merged to main, maintains plugin.json
+# through extra-files plus CHANGELOG.md, and opens a release PR that,
+# when merged, tags vX.Y.Z. The existing tag-driven Release workflow then
+# builds and publishes the plugin archives.
+#
+# This workflow auto-merges only the release PR it creates, after required
+# checks pass. Other pull requests retain their normal merge policy.
+# RELEASE_PLEASE_TOKEN must be a fine-grained PAT with Contents + Pull
+# requests read/write on this repository. A user-owned token is required
+# so the new tag can start the existing Release workflow.
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  release-please:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate RELEASE_PLEASE_TOKEN is set
+        env:
+          TOKEN: ${{ secrets.RELEASE_PLEASE_TOKEN }}
+        run: |
+          if [ -z "$TOKEN" ]; then
+            echo "::error::RELEASE_PLEASE_TOKEN secret is not set. Create a fine-grained PAT scoped to this repository with Contents and Pull requests set to read and write, then add it to this repository's secrets."
+            exit 1
+          fi
+
+      - uses: googleapis/release-please-action@8b8fd2cc23b2e18957157a9d923d75aa0c6f6ad5 # v4
+        id: release
+        with:
+          token: ${{ secrets.RELEASE_PLEASE_TOKEN }}
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
+
+      - uses: actions/checkout@v4
+        if: ${{ steps.release.outputs.pr }}
+        with:
+          token: ${{ secrets.RELEASE_PLEASE_TOKEN }}
+          fetch-depth: 0
+
+      - name: Refresh plugin.json checksums on the release PR
+        if: ${{ steps.release.outputs.pr }}
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_PLEASE_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_PR: ${{ steps.release.outputs.pr }}
+        run: |
+          pr_number=$(jq -r '.number' <<<"$RELEASE_PR")
+          gh pr checkout "$pr_number"
+          make sync-db
+          if git diff --quiet -- checksums.txt; then
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add checksums.txt
+          git commit -m "chore: refresh plugin.json checksums"
+          git push
+
+      - name: Enable auto-merge for release PR
+        if: ${{ steps.release.outputs.pr }}
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_PLEASE_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_PR: ${{ steps.release.outputs.pr }}
+        run: |
+          pr_number=$(jq -r '.number' <<<"$RELEASE_PR")
+          gh pr merge --merge --auto "$pr_number"

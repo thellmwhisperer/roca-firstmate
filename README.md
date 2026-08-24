@@ -2,7 +2,7 @@
 
 La Roca plugin that mirrors one or more firstmate homes into its own federated SQLite database and routes deterministic wakeups to attached agent seats.
 
-This repository is the public normative full-size plugin example. Use it as the shape to copy: a `plugin.json` manifest, a custodial federated SQLite database with a semantic (and embeddings-only vector) fragment, a shipped executable, package checksums, and a tag-driven GitHub release. La Roca the product stays untouched. Firstmate is mirrored, not modified. Tests use only the fabricated homes under `testdata/homes/`; public code and text contain no live home data or install details.
+This repository is the public normative full-size plugin example. Use it as the shape to copy: a `plugin.json` manifest, a custodial federated SQLite database with a semantic (and embeddings-only vector) fragment, a shipped executable, package checksums, and a release-please-driven GitHub release. La Roca the product stays untouched. Firstmate is mirrored, not modified. Tests use only the fabricated homes under `testdata/homes/`; public code and text contain no live home data or install details.
 
 The minimal three-file walk (data only, no executable) lives in La Roca's [docs/plugins.md](https://github.com/thellmwhisperer/la-roca/blob/v1.74.2/docs/plugins.md). This repo is the next step: a federated plugin that also ships code.
 
@@ -75,7 +75,7 @@ make e2e        # scratch-home install, dispatch, and release-to-release update
 
 Each archive contains only package-root files. Nested paths are refused at extract time.
 
-Push a tag `vX.Y.Z` whose `X.Y.Z` matches `plugin.json` `version`. GitHub Actions builds both platforms, checks the packaged checksums, and publishes the GitHub release. Local builds are not official releases.
+Do not push a release tag by hand. Merged conventional commits on `main` update one release-please pull request. Merging that PR tags `vX.Y.Z`, keeps `plugin.json` and `.release-please-manifest.json` on the same version, refreshes the source-tree `checksums.txt`, and starts the existing Release workflow. That workflow builds both platforms, checks the packaged checksums, and publishes the GitHub release. Local builds are not official releases. The repository secret `RELEASE_PLEASE_TOKEN` is a fine-grained PAT with Contents and Pull requests read/write; tags created with `GITHUB_TOKEN` would not start the Release workflow.
 
 Published names:
 
@@ -117,7 +117,13 @@ Do not install this repository onto a live captain La Roca while developing. Pro
 
 ### Versioning
 
-`plugin.json` `version` is the package version. Git tags are `vMAJOR.MINOR.PATCH` and must match it. The release workflow refuses a tag that does not.
+`plugin.json` `version` is the package version. Release-please owns it through `extra-files` together with `.release-please-manifest.json`. Git tags are `vMAJOR.MINOR.PATCH` and must match both. The Release workflow refuses a tag that does not.
+
+Conventional commits choose the next version after the last published tag:
+
+- `fix:` produces a patch release.
+- `feat:` produces a minor release. Before `1.0.0` a breaking change also stays MINOR.
+- A commit with `!` after its type, such as `feat!:`, or a `BREAKING CHANGE:` footer produces a major release after `1.0.0`.
 
 | Bump | When |
 | --- | --- |
