@@ -32,8 +32,12 @@ type workflowJob struct {
 }
 
 type workflowStep struct {
-	Name string `yaml:"name"`
-	Run  string `yaml:"run"`
+	Name string            `yaml:"name"`
+	Uses string            `yaml:"uses"`
+	If   string            `yaml:"if"`
+	With map[string]string `yaml:"with"`
+	Run  string            `yaml:"run"`
+	Env  map[string]string `yaml:"env"`
 }
 
 func TestReleaseWorkflowBuildsBothPlatformsAndPublishesAGitHubRelease(t *testing.T) {
@@ -71,6 +75,48 @@ func TestReleaseWorkflowBuildsBothPlatformsAndPublishesAGitHubRelease(t *testing
 	} {
 		if !hasCommand(commands, want) {
 			t.Fatalf("publish job commands %v do not include %v", commands, want)
+		}
+	}
+}
+
+func TestReleaseWorkflowRejectsUnsynchronizedTagVersions(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join(repoRoot(t), ".github", "workflows", "release.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var workflow releaseWorkflow
+	if err := yaml.Unmarshal(raw, &workflow); err != nil {
+		t.Fatalf("parse release workflow: %v", err)
+	}
+	step, ok := workflowStepNamed(workflow.Jobs["publish"].Steps, "The tag matches release-please versions")
+	if !ok {
+		t.Fatal("release workflow has no version synchronization gate")
+	}
+	dir := t.TempDir()
+	writeVersions := func(plugin, manifest string) {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(dir, "plugin.json"), []byte(`{"version":"`+plugin+`"}`), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, ".release-please-manifest.json"), []byte(`{".":"`+manifest+`"}`), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeVersions("0.6.0", "0.6.0")
+	if out, err := runWorkflowScript(step.Run, dir, map[string]string{"TAG": "v0.6.0"}); err != nil {
+		t.Fatalf("release gate rejected synchronized versions: %v\n%s", err, out)
+	}
+	for _, tc := range []struct {
+		plugin   string
+		manifest string
+		tag      string
+	}{
+		{plugin: "0.6.0", manifest: "0.5.0", tag: "v0.6.0"},
+		{plugin: "0.6.0", manifest: "0.6.0", tag: "v0.5.0"},
+	} {
+		writeVersions(tc.plugin, tc.manifest)
+		if out, err := runWorkflowScript(step.Run, dir, map[string]string{"TAG": tc.tag}); err == nil {
+			t.Fatalf("release gate accepted plugin=%s manifest=%s tag=%s:\n%s", tc.plugin, tc.manifest, tc.tag, out)
 		}
 	}
 }
