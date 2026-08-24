@@ -146,9 +146,48 @@ func TestReleasePleaseOwnsThePluginVersion(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if identity.Version != manifest["."] {
-		t.Fatalf("plugin.json version = %q, want manifest version %q", identity.Version, manifest["."])
+	if !regexp.MustCompile(`^\d+\.\d+\.\d+$`).MatchString(identity.Version) {
+		t.Fatalf("plugin.json version = %q, want a stable semver", identity.Version)
 	}
+	// The manifest is the last published release. plugin.json may already
+	// carry the next version after a product bump; the release PR converges
+	// them before it tags.
+	if identity.Version != manifest["."] && !versionIsAhead(identity.Version, manifest["."]) {
+		t.Fatalf("plugin.json version %q is not the published manifest %q or the next pending release",
+			identity.Version, manifest["."])
+	}
+}
+
+func versionIsAhead(current, baseline string) bool {
+	cur := parseSemver(current)
+	base := parseSemver(baseline)
+	if cur == nil || base == nil {
+		return false
+	}
+	return cur[0] > base[0] || (cur[0] == base[0] && cur[1] > base[1]) ||
+		(cur[0] == base[0] && cur[1] == base[1] && cur[2] > base[2])
+}
+
+func parseSemver(version string) []int {
+	parts := strings.Split(version, ".")
+	if len(parts) != 3 {
+		return nil
+	}
+	out := make([]int, 3)
+	for i, part := range parts {
+		if part == "" {
+			return nil
+		}
+		n := 0
+		for _, r := range part {
+			if r < '0' || r > '9' {
+				return nil
+			}
+			n = n*10 + int(r-'0')
+		}
+		out[i] = n
+	}
+	return out
 }
 
 func TestExtraFilesVersionBumpInvalidatesSourceChecksumsUntilSync(t *testing.T) {
