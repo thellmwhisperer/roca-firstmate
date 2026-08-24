@@ -35,13 +35,19 @@ jobs:
       - name: Format, vet and tests
         run: make check
 
-      - name: The tag matches plugin.json
+      - name: The tag matches release-please versions
         env:
           TAG: ${{ inputs.tag || github.ref_name }}
         run: |
           version=$(awk -F '"' '/"version"/{print $4; exit}' plugin.json)
-          test "$TAG" = "v$version" || {
-            echo "tag is $TAG and plugin.json version is $version" >&2
+          manifest_version=$(python3 - <<'PY'
+          import json
+          with open(".release-please-manifest.json", encoding="utf-8") as manifest:
+              print(json.load(manifest).get(".", ""))
+          PY
+          )
+          test "$TAG" = "v$version" && test "$version" = "$manifest_version" || {
+            echo "tag is $TAG, plugin.json version is $version, and release-please manifest version is $manifest_version" >&2
             exit 1
           }
 

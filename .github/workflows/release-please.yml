@@ -6,8 +6,8 @@ name: release-please
 # when merged, tags vX.Y.Z. The existing tag-driven Release workflow then
 # builds and publishes the plugin archives.
 #
-# This workflow auto-merges only the release PR it creates, after required
-# checks pass. Other pull requests retain their normal merge policy.
+# This workflow merges only the release PR it creates, after its CI check
+# succeeds. Other pull requests retain their normal merge policy.
 # RELEASE_PLEASE_TOKEN must be a fine-grained PAT with Contents + Pull
 # requests read/write on this repository. A user-owned token is required
 # so the new tag can start the existing Release workflow.
@@ -17,6 +17,7 @@ on:
     branches: [main]
 
 permissions:
+  checks: read
   contents: write
   pull-requests: write
 
@@ -65,12 +66,30 @@ jobs:
           git commit -m "chore: refresh plugin.json checksums"
           git push
 
-      - name: Enable auto-merge for release PR
+      - name: Merge release PR after CI succeeds
         if: ${{ steps.release.outputs.pr }}
         env:
           GH_TOKEN: ${{ secrets.RELEASE_PLEASE_TOKEN }}
+          CHECKS_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           RELEASE_PR: ${{ steps.release.outputs.pr }}
         run: |
           pr_number=$(jq -r '.number' <<<"$RELEASE_PR")
-          gh pr merge --merge --auto "$pr_number"
+          head_sha=$(gh pr view "$pr_number" --json headRefOid --jq .headRefOid)
+          for attempt in {1..60}; do
+            state=$(GH_TOKEN="$CHECKS_TOKEN" gh api "repos/$GH_REPO/commits/$head_sha/check-runs" \
+              --jq '.check_runs | map(select(.name == "check")) | first | if . == null then "" else [.status, (.conclusion // "")] | @tsv end')
+            status=${state%%$'\t'*}
+            conclusion=${state#*$'\t'}
+            if [ "$status" = "completed" ]; then
+              if [ "$conclusion" != "success" ]; then
+                echo "::error::CI check concluded $conclusion for $head_sha"
+                exit 1
+              fi
+              gh pr merge --merge --match-head-commit "$head_sha" "$pr_number"
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "::error::Timed out waiting for CI check on $head_sha"
+          exit 1
